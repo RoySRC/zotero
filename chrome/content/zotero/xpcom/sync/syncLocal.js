@@ -306,6 +306,9 @@ Zotero.Sync.Data.Local = {
 				Zotero.Prefs.clear('sync.storage.username');
 				Zotero.Prefs.clear('sync.storage.url');
 				Zotero.Prefs.clear('sync.storage.scheme');
+				await Zotero.Sync.Storage.Profiles.clearAllWebDAVProfileCredentials();
+				Zotero.Prefs.clear('sync.storage.webdavProfiles');
+				Zotero.Prefs.clear('sync.storage.libraryProfiles');
 				Zotero.Prefs.clear('sync.storage.protocol');
 				Zotero.Prefs.clear('sync.storage.enabled');
 				
@@ -369,7 +372,10 @@ Zotero.Sync.Data.Local = {
 			return false;
 		}
 		
-		if (library.filesEditable && !filesEditable && ((await this._libraryHasUnsyncedFiles(libraryID)))) {
+		if (library.filesEditable
+				&& !filesEditable
+				&& !Zotero.Sync.Storage.Profiles.getWebDAVProfileForLibrary(libraryID)
+				&& ((await this._libraryHasUnsyncedFiles(libraryID)))) {
 			let index = Zotero.Sync.Storage.Utilities.showFileWriteAccessLostPrompt(win, library);
 			// Reset library files
 			if (index == 0) {
