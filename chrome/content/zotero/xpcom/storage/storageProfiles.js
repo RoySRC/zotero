@@ -139,11 +139,17 @@ Zotero.Sync.Storage.Profiles = {
 			return null;
 		}
 
-		let url = this._normalizeURL(Zotero.Prefs.get('sync.storage.url'));
+		return this._getGlobalWebDAVRootFromSettings();
+	},
+
+	_getGlobalWebDAVRootFromSettings(settings = {}) {
+		let url = this._normalizeURL(
+			settings.url !== undefined ? settings.url : Zotero.Prefs.get('sync.storage.url')
+		);
 		if (!url) {
 			return null;
 		}
-		return `${Zotero.Prefs.get('sync.storage.scheme') || 'https'}://${url}`;
+		return `${settings.scheme || Zotero.Prefs.get('sync.storage.scheme') || 'https'}://${url}`;
 	},
 
 	_getAssignedLibraryIDsForProfile(profileID, assignments = null) {
@@ -197,6 +203,38 @@ Zotero.Sync.Storage.Profiles = {
 	_assertAssignedWebDAVRootIsUnique(profileID, profile) {
 		for (let libraryID of this._getAssignedLibraryIDsForProfile(profileID)) {
 			this._assertWebDAVRootAssignableToLibrary(profileID, libraryID, profile);
+		}
+	},
+
+	assertGlobalWebDAVRootIsUnique(settings = {}) {
+		let enabled = settings.enabled !== undefined
+			? settings.enabled
+			: Zotero.Prefs.get('sync.storage.enabled');
+		let protocol = settings.protocol || Zotero.Prefs.get('sync.storage.protocol');
+		if (!enabled
+				|| protocol != 'webdav'
+				|| this.getLibraryProfileID(Zotero.Libraries.userLibraryID)) {
+			return;
+		}
+
+		let root = this._getGlobalWebDAVRootFromSettings(settings);
+		if (!root) {
+			return;
+		}
+
+		let assignments = this._getPrefObject(this._libraryProfilesPref);
+		for (let [key, profileID] of Object.entries(assignments)) {
+			let libraryID = this._getLibraryIDFromProfileKey(key);
+			if (!libraryID || libraryID == Zotero.Libraries.userLibraryID) {
+				continue;
+			}
+			let profile = this.getWebDAVProfile(profileID);
+			if (this._getWebDAVRoot(profile) == root) {
+				throw new Error(
+					`Global WebDAV file-sync settings use the same WebDAV URL as profile `
+					+ `'${profileID}' assigned to another library`
+				);
+			}
 		}
 	},
 
@@ -317,6 +355,21 @@ Zotero.Sync.Storage.Profiles = {
 
 		if (Zotero.Sync.Runner) {
 			Zotero.Sync.Runner.resetStorageController('webdav', { profileID });
+		}
+	},
+
+	async clearAllWebDAVProfileCredentials() {
+		for (let profileID of Object.keys(this.getWebDAVProfiles())) {
+			try {
+				let controller = new Zotero.Sync.Storage.Mode.WebDAV({ profileID });
+				await controller.clearPassword();
+				if (Zotero.Sync.Runner) {
+					Zotero.Sync.Runner.resetStorageController('webdav', { profileID });
+				}
+			}
+			catch (e) {
+				Zotero.logError(e);
+			}
 		}
 	},
 

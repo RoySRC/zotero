@@ -697,10 +697,14 @@ Zotero_Preferences.Sync = {
 
 	_lastStorageProtocol: null,
 	_lastStorageURL: null,
+	_lastStorageScheme: null,
+	_lastStorageEnabled: null,
 
 	storeLastStorageSettings: function () {
 		this._lastStorageProtocol = Zotero.Prefs.get('sync.storage.protocol');
 		this._lastStorageURL = Zotero.Prefs.get('sync.storage.url');
+		this._lastStorageScheme = Zotero.Prefs.get('sync.storage.scheme');
+		this._lastStorageEnabled = Zotero.Prefs.get('sync.storage.enabled');
 	},
 
 
@@ -864,7 +868,9 @@ Zotero_Preferences.Sync = {
 
 	_loadStorageProfileFields: function (profileID) {
 		let profile = profileID ? Zotero.Sync.Storage.Profiles.getWebDAVProfile(profileID) : null;
-		document.getElementById('storage-profile-id').value = profile ? profile.id : '';
+		let idField = document.getElementById('storage-profile-id');
+		idField.value = profile ? profile.id : '';
+		idField.disabled = !!profile;
 		document.getElementById('storage-profile-url-prefix').value = profile ? profile.scheme : 'https';
 		document.getElementById('storage-profile-url').value = profile ? profile.url : '';
 		document.getElementById('storage-profile-username').value = profile ? profile.username : '';
@@ -924,7 +930,8 @@ Zotero_Preferences.Sync = {
 
 
 	saveStorageProfile: async function ({ silent = false } = {}) {
-		let profileID = document.getElementById('storage-profile-id').value.trim();
+		let profileID = document.getElementById('storage-profile-selector').value
+			|| document.getElementById('storage-profile-id').value.trim();
 		if (!profileID) {
 			document.getElementById('storage-profile-id').focus();
 			this._setStorageProfileStatus(
@@ -1162,6 +1169,8 @@ Zotero_Preferences.Sync = {
 	onStorageSettingsChange: async function() {
 		var oldProtocol = this._lastStorageProtocol;
 		var oldURL = this._lastStorageURL;
+		var oldScheme = this._lastStorageScheme;
+		var oldEnabled = this._lastStorageEnabled;
 
 		// Necessary for pref to update
 		await Zotero.Promise.delay(1);
@@ -1171,6 +1180,29 @@ Zotero_Preferences.Sync = {
 			// Strip scheme, leading '://' or '//' (#3483), and trailing '/zotero'
 			.replace(/(^https?:\/\/|^:?\/\/|\/zotero\/?$|\/$)/g, '')
 		Zotero.Prefs.set('sync.storage.url', newURL);
+
+		try {
+			Zotero.Sync.Storage.Profiles.assertGlobalWebDAVRootIsUnique({
+				enabled: Zotero.Prefs.get('sync.storage.enabled'),
+				protocol: newProtocol,
+				scheme: Zotero.Prefs.get('sync.storage.scheme'),
+				url: newURL
+			});
+		}
+		catch (e) {
+			Zotero.logError(e);
+			Zotero.Prefs.set('sync.storage.enabled', oldEnabled);
+			Zotero.Prefs.set('sync.storage.protocol', oldProtocol);
+			Zotero.Prefs.set('sync.storage.scheme', oldScheme);
+			Zotero.Prefs.set('sync.storage.url', oldURL);
+			document.getElementById('storage-protocol').value = oldProtocol;
+			document.getElementById('storage-url-prefix').value = oldScheme;
+			document.getElementById('storage-url').value = oldURL;
+			this._setStorageProfileStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			await this.updateStorageSettingsUI({ unverify: false });
+			return;
+		}
 
 		if (oldProtocol != newProtocol || oldURL != newURL) {
 			await Zotero.Sync.Storage.Local.resetAllSyncStates(Zotero.Libraries.userLibraryID);
