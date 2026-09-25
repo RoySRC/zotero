@@ -768,6 +768,7 @@ Zotero_Preferences.Sync = {
 		document.getElementById('storage-profile-url-prefix').value = 'https';
 		this.updateStorageProfilesUI();
 		this.updateLibraryStorageProfilesUI();
+		this.updateWebDAVProjectLibrariesUI();
 	},
 
 
@@ -798,7 +799,7 @@ Zotero_Preferences.Sync = {
 		if (!profile) {
 			return profileID;
 		}
-		let url = profile.url ? `${profile.scheme}://${profile.url}/zotero/` : '';
+		let url = profile.url ? `${profile.scheme}://${profile.url}/zotero/libraries/.../files/` : '';
 		return url ? `${profileID} (${url})` : profileID;
 	},
 
@@ -836,15 +837,7 @@ Zotero_Preferences.Sync = {
 		}
 		for (let profileID of this._getSortedStorageProfileIDs()) {
 			let label = this._getProfileMenuLabel(profileID);
-			let disabled = libraryID !== null
-				&& Zotero.Sync.Storage.Profiles.isProfileAssignedToAnotherLibrary(profileID, libraryID);
-			if (disabled) {
-				label = this._formatStorageMessage(
-					'preferences-sync-fileSyncing-profile-in-use',
-					{ label }
-				);
-			}
-			this._appendMenuItem(menupopup, label, profileID, disabled);
+			this._appendMenuItem(menupopup, label, profileID);
 		}
 	},
 
@@ -862,6 +855,7 @@ Zotero_Preferences.Sync = {
 		this._loadStorageProfileFields(selectedProfileID);
 		this._updateStorageProfileActionState();
 		this.updateLibraryStorageProfilesUI();
+		this.updateWebDAVProjectLibrariesUI();
 		this.updateStorageTerms();
 	},
 
@@ -1055,12 +1049,142 @@ Zotero_Preferences.Sync = {
 			return;
 		}
 
-		await Zotero.Sync.Storage.Profiles.removeWebDAVProfile(profileID);
+		try {
+			await Zotero.Sync.Storage.Profiles.removeWebDAVProfile(profileID);
+		}
+		catch (e) {
+			Zotero.logError(e);
+			this._setStorageProfileStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			return;
+		}
 		this.updateStorageProfilesUI();
 		this._setStorageProfileStatus(this._formatStorageMessage(
 			'preferences-sync-fileSyncing-profile-deleted',
 			{ profileID }
 		));
+	},
+
+
+	updateWebDAVProjectLibrariesUI: function () {
+		let profileMenu = document.getElementById('storage-webdav-project-profile');
+		let createButton = document.getElementById('storage-webdav-project-create');
+		let list = document.getElementById('storage-webdav-project-list');
+		if (!profileMenu || !createButton || !list) {
+			return;
+		}
+
+		let profileIDs = this._getSortedStorageProfileIDs();
+		this._populateProfileMenu(profileMenu);
+		profileMenu.disabled = profileIDs.length == 0;
+		createButton.disabled = profileIDs.length == 0;
+		if (!profileIDs.includes(profileMenu.value)) {
+			let selectedProfile = document.getElementById('storage-profile-selector').value;
+			profileMenu.value = profileIDs.includes(selectedProfile) ? selectedProfile : (profileIDs[0] || '');
+		}
+
+		list.replaceChildren();
+		let projects = Object.values(Zotero.Sync.Storage.Profiles.getWebDAVProjectLibraries())
+			.sort((a, b) => Zotero.getLocaleCollation().compareString(1, a.name, b.name));
+		for (let project of projects) {
+			let row = document.createXULElement('hbox');
+			row.setAttribute('class', 'storage-library-profile-row');
+			row.setAttribute('align', 'center');
+
+			let nameLabel = document.createXULElement('label');
+			nameLabel.value = project.name;
+			row.appendChild(nameLabel);
+
+			let profileLabel = document.createXULElement('label');
+			profileLabel.value = project.profileID
+				? this._getProfileMenuLabel(project.profileID)
+				: this._formatStorageMessage('preferences-sync-fileSyncing-webDAVProject-missing-profile');
+			row.appendChild(profileLabel);
+
+			let deleteButton = document.createXULElement('button');
+			deleteButton.setAttribute(
+				'label',
+				this._formatStorageMessage('preferences-sync-fileSyncing-webDAVProject-remove')
+			);
+			deleteButton.addEventListener('command', () => {
+				this.removeWebDAVProjectLibrary(project.libraryID);
+			});
+			row.appendChild(deleteButton);
+
+			list.appendChild(row);
+		}
+	},
+
+
+	createWebDAVProjectLibrary: async function () {
+		let nameField = document.getElementById('storage-webdav-project-name');
+		let profileMenu = document.getElementById('storage-webdav-project-profile');
+		let name = nameField.value.trim();
+		let profileID = profileMenu.value;
+		if (!name) {
+			nameField.focus();
+			this._setStorageProfileStatus(
+				this._formatStorageMessage('preferences-sync-fileSyncing-webDAVProject-enter-name'),
+				true
+			);
+			return;
+		}
+		if (!profileID) {
+			this._setStorageProfileStatus(
+				this._formatStorageMessage('preferences-sync-fileSyncing-webDAVProject-select-profile'),
+				true
+			);
+			return;
+		}
+
+		try {
+			await Zotero.Sync.Storage.Profiles.createWebDAVProjectLibrary(name, profileID);
+		}
+		catch (e) {
+			Zotero.logError(e);
+			this._setStorageProfileStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			return;
+		}
+
+		nameField.value = '';
+		this._setStorageProfileStatus(this._formatStorageMessage(
+			'preferences-sync-fileSyncing-webDAVProject-created',
+			{ name }
+		));
+		this.updateStorageProfilesUI(profileID);
+	},
+
+
+	removeWebDAVProjectLibrary: async function (libraryID) {
+		let library = Zotero.Libraries.get(libraryID);
+		let confirmed = Services.prompt.confirm(
+			window,
+			Zotero.getString('general.warning'),
+			this._formatStorageMessage(
+				'preferences-sync-fileSyncing-webDAVProject-remove-confirm',
+				{ name: library.name }
+			)
+		);
+		if (!confirmed) {
+			return;
+		}
+
+		try {
+			await Zotero.Sync.Storage.Profiles.removeWebDAVProjectLibrary(libraryID);
+		}
+		catch (e) {
+			Zotero.logError(e);
+			this._setStorageProfileStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			return;
+		}
+
+		this._setStorageProfileStatus(this._formatStorageMessage(
+			'preferences-sync-fileSyncing-webDAVProject-removed',
+			{ name: library.name }
+		));
+		this.updateStorageProfilesUI();
 	},
 
 
@@ -1096,13 +1220,26 @@ Zotero_Preferences.Sync = {
 		container.replaceChildren();
 
 		for (let library of this._getProfileAssignableLibraries()) {
+			let isWebDAVProject = Zotero.Sync.Storage.Profiles
+				.isWebDAVProjectLibrary(library.libraryID);
 			let row = document.createXULElement('hbox');
 			row.setAttribute('class', 'storage-library-profile-row');
 			row.setAttribute('align', 'center');
 
+			let labelBox = document.createXULElement('hbox');
+			labelBox.setAttribute('align', 'center');
 			let label = document.createXULElement('label');
 			label.value = library.name;
-			row.appendChild(label);
+			labelBox.appendChild(label);
+			if (isWebDAVProject) {
+				let projectLabel = document.createXULElement('label');
+				projectLabel.value = this._formatStorageMessage(
+					'preferences-sync-fileSyncing-webDAVProject-label'
+				);
+				projectLabel.setAttribute('class', 'storage-profile-status');
+				labelBox.appendChild(projectLabel);
+			}
+			row.appendChild(labelBox);
 
 			let menu = document.createXULElement('menulist');
 			menu.setAttribute('native', 'true');
@@ -1115,12 +1252,38 @@ Zotero_Preferences.Sync = {
 				defaultLabel: this._getDefaultStorageLabelForLibrary(library),
 				libraryID: library.libraryID
 			});
+			if (isWebDAVProject) {
+				let defaultItem = Array.from(popup.children)
+					.find(item => !item.getAttribute('value'));
+				if (defaultItem) {
+					defaultItem.setAttribute('disabled', 'true');
+				}
+			}
 			menu.value = Zotero.Sync.Storage.Profiles.getLibraryProfileID(library.libraryID) || '';
 			menu.addEventListener('command', () => {
 				this.onLibraryStorageProfileChange(library.libraryID, menu.value);
 			});
 
 			container.appendChild(row);
+
+			let metadataRow = document.createXULElement('hbox');
+			metadataRow.setAttribute('class', 'storage-library-profile-row');
+			metadataRow.setAttribute('align', 'center');
+			metadataRow.appendChild(document.createXULElement('box'));
+			let metadataCheckbox = document.createXULElement('checkbox');
+			metadataCheckbox.setAttribute('native', 'true');
+			metadataCheckbox.setAttribute(
+				'label',
+				this._formatStorageMessage('preferences-sync-fileSyncing-library-metadata-sync')
+			);
+			metadataCheckbox.checked = Zotero.Sync.Storage.Profiles
+				.isWebDAVMetadataEnabledForLibrary(library.libraryID);
+			metadataCheckbox.disabled = isWebDAVProject || !menu.value;
+			metadataCheckbox.addEventListener('command', () => {
+				this.onLibraryMetadataSyncChange(library.libraryID, metadataCheckbox.checked);
+			});
+			metadataRow.appendChild(metadataCheckbox);
+			container.appendChild(metadataRow);
 		}
 	},
 
@@ -1140,8 +1303,46 @@ Zotero_Preferences.Sync = {
 			Zotero.alert(window, Zotero.getString('general.error'), e.message);
 		}
 		this.updateLibraryStorageProfilesUI();
+		this.updateWebDAVProjectLibrariesUI();
 		await this.updateStorageSettingsUI({ unverify: false });
 		this.updateStorageSettingsGroupsUI();
+	},
+
+
+	onLibraryMetadataSyncChange: async function (libraryID, enabled) {
+		try {
+			if (enabled) {
+				let library = Zotero.Libraries.get(libraryID);
+				let confirmed = Services.prompt.confirm(
+					window,
+					Zotero.getString('general.warning'),
+					this._formatStorageMessage(
+						'preferences-sync-fileSyncing-library-metadata-migrate-confirm',
+						{ name: library.name }
+					)
+				);
+				if (!confirmed) {
+					this.updateLibraryStorageProfilesUI();
+					this.updateWebDAVProjectLibrariesUI();
+					return;
+				}
+				await Zotero.Sync.Storage.Profiles.migrateLibraryToWebDAV(libraryID);
+				this._setStorageProfileStatus(this._formatStorageMessage(
+					'preferences-sync-fileSyncing-library-metadata-migrated',
+					{ name: library.name }
+				));
+			}
+			else {
+				Zotero.Sync.Storage.Profiles.setWebDAVMetadataEnabledForLibrary(libraryID, false);
+			}
+		}
+		catch (e) {
+			Zotero.logError(e);
+			this._setStorageProfileStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+		}
+		this.updateLibraryStorageProfilesUI();
+		this.updateWebDAVProjectLibrariesUI();
 	},
 
 

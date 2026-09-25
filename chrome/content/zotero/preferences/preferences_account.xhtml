@@ -161,11 +161,11 @@
 							</menulist>
 							<label value="://"/>
 							<html:input id="storage-url" style="flex: 1;"
-								aria-label="&zotero.preferences.sync.fileSyncing.url;"
-								preference="extensions.zotero.sync.storage.url"
-								onkeypress="Zotero_Preferences.Sync.onStorageSettingsKeyPress(event)"
-								onchange="Zotero_Preferences.Sync.onStorageSettingsChange()"/>
-							<label value="/zotero/"/>
+									aria-label="&zotero.preferences.sync.fileSyncing.url;"
+									preference="extensions.zotero.sync.storage.url"
+									onkeypress="Zotero_Preferences.Sync.onStorageSettingsKeyPress(event)"
+									onchange="Zotero_Preferences.Sync.onStorageSettingsChange()"/>
+								<label value="/zotero/"/>
 						</hbox>
 
 						<label control="storage-username" value="&zotero.preferences.sync.username;"/>
@@ -238,7 +238,7 @@
 							<label value="://"/>
 							<html:input id="storage-profile-url" style="flex: 1;"
 								aria-label="&zotero.preferences.sync.fileSyncing.url;"/>
-							<label value="/zotero/"/>
+							<label value="/zotero/libraries/.../files/"/>
 						</hbox>
 
 						<label control="storage-profile-username" value="&zotero.preferences.sync.username;"/>
@@ -277,6 +277,36 @@
 					<description class="storage-profile-description"
 						data-l10n-id="preferences-sync-fileSyncing-library-storage-description"/>
 					<vbox id="storage-library-profile-list"/>
+				</vbox>
+
+				<separator class="thin"/>
+
+				<vbox id="storage-webdav-project-settings" class="storage-webdav-project-settings">
+					<label><html:h3 data-l10n-id="preferences-sync-fileSyncing-webDAVProjects-title"/></label>
+					<description class="storage-profile-description"
+						data-l10n-id="preferences-sync-fileSyncing-webDAVProjects-description"/>
+
+					<html:div class="form-grid storage-webdav-project-editor">
+						<label control="storage-webdav-project-name"
+							data-l10n-id="preferences-sync-fileSyncing-webDAVProject-name"/>
+						<hbox>
+							<html:input id="storage-webdav-project-name"/>
+						</hbox>
+
+						<label control="storage-webdav-project-profile"
+							data-l10n-id="preferences-sync-fileSyncing-profile"/>
+						<hbox align="center">
+							<menulist id="storage-webdav-project-profile"
+								native="true">
+								<menupopup/>
+							</menulist>
+							<button id="storage-webdav-project-create"
+								data-l10n-id="preferences-sync-fileSyncing-webDAVProject-create"
+								oncommand="Zotero_Preferences.Sync.createWebDAVProjectLibrary()"/>
+						</hbox>
+					</html:div>
+
+					<vbox id="storage-webdav-project-list"/>
 				</vbox>
 
 				<separator class="thin"/>

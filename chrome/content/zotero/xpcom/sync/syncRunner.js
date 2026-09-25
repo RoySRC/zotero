@@ -430,6 +430,20 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 		var access = keyInfo.access;
 		
 		var syncAllLibraries = !libraries || !libraries.length;
+		let webDAVProjectLibraryIDs = Zotero.Sync.Storage.Profiles.getWebDAVProjectLibraryIDs();
+		let webDAVProjectGroupIDs = new Set(
+			webDAVProjectLibraryIDs.map(id => Zotero.Groups.getGroupIDFromLibraryID(id))
+		);
+		let isWebDAVProjectGroupID = groupID => webDAVProjectGroupIDs.has(groupID);
+		let addWebDAVProjectLibraries = () => {
+			let skippedGroups = Zotero.Sync.Data.Local.getSkippedGroups();
+			for (let libraryID of webDAVProjectLibraryIDs) {
+				let groupID = Zotero.Groups.getGroupIDFromLibraryID(libraryID);
+				if (!skippedGroups.includes(groupID)) {
+					libraries.push(libraryID);
+				}
+			}
+		};
 		
 		// TODO: Ability to remove or disable editing of user library?
 		
@@ -445,6 +459,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 					libraries = Zotero.Utilities.arrayDiff(libraries, skippedLibraries);
 				}
 			}
+			addWebDAVProjectLibraries();
 		}
 		else {
 			// Check access to specified libraries
@@ -523,12 +538,14 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 			if (syncAllLibraries) {
 				localGroups = Zotero.Groups.getAll()
 					.map(g => g.id)
+					.filter(id => !isWebDAVProjectGroupID(id))
 					// Don't include skipped groups
 					.filter(id => skippedGroups.indexOf(id) == -1);
 			}
 			else {
 				localGroups = libraries
-					.filter(id => Zotero.Libraries.get(id).libraryType == 'group')
+					.filter(id => Zotero.Libraries.get(id).libraryType == 'group'
+						&& !Zotero.Sync.Storage.Profiles.isWebDAVProjectLibrary(id))
 					.map(id => Zotero.Groups.getGroupIDFromLibraryID(id))
 			}
 			Zotero.debug("Local groups:");
@@ -538,7 +555,8 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 		}
 		// No group access
 		else {
-			remotelyMissingGroups = Zotero.Groups.getAll();
+			remotelyMissingGroups = Zotero.Groups.getAll()
+				.filter(group => !isWebDAVProjectGroupID(group.id));
 		}
 		
 		if (remotelyMissingGroups.length) {
@@ -669,6 +687,20 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 				let opts = {};
 				Object.assign(opts, options);
 				opts.libraryID = libraryID;
+				let metadataProfile = Zotero.Sync.Storage.Profiles
+					.getWebDAVMetadataProfileForLibrary(libraryID);
+				if (metadataProfile) {
+					Zotero.debug(
+						`Using WebDAV metadata profile '${metadataProfile.id}' for library ${libraryID}`
+					);
+					opts.apiClient = new Zotero.Sync.WebDAVAPIClient({
+						libraryID,
+						profileID: metadataProfile.id,
+						userID: options.userID,
+						caller: options.caller,
+						cancellerReceiver: _cancellerReceiver
+					});
+				}
 				
 				_currentEngine = new Zotero.Sync.Data.Engine(opts);
 				await _currentEngine.start();

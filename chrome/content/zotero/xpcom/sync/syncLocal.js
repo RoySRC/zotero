@@ -309,6 +309,8 @@ Zotero.Sync.Data.Local = {
 				await Zotero.Sync.Storage.Profiles.clearAllWebDAVProfileCredentials();
 				Zotero.Prefs.clear('sync.storage.webdavProfiles');
 				Zotero.Prefs.clear('sync.storage.libraryProfiles');
+				Zotero.Prefs.clear('sync.storage.webdavMetadataLibraries');
+				Zotero.Prefs.clear('sync.storage.webdavProjectLibraries');
 				Zotero.Prefs.clear('sync.storage.protocol');
 				Zotero.Prefs.clear('sync.storage.enabled');
 				

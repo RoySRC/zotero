@@ -394,6 +394,62 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 				Zotero.Sync.Storage.Local.SYNC_STATE_IN_SYNC
 			);
 		})
+
+		it("should bootstrap a missing profiled WebDAV file from Zotero Storage", async function () {
+			let group = await createGroup({ editable: true, filesEditable: false });
+			let item = new Zotero.Item("attachment");
+			item.libraryID = group.libraryID;
+			item.attachmentLinkMode = 'imported_file';
+			item.attachmentPath = 'storage:test.pdf';
+			item.attachmentSyncState = 'to_download';
+			await item.saveTx();
+
+			let profiledController = new Zotero.Sync.Storage.Mode.WebDAV({
+				libraryID: group.libraryID,
+				profileID: 'project-a',
+				apiClient: {}
+			});
+			let initStub = sinon.stub(profiledController, '_init').resolves();
+			let metadataStub = sinon.stub(profiledController, '_getStorageFileMetadata')
+				.resolves(null);
+			let fileExistsStub = sinon.stub(item, 'fileExists');
+			fileExistsStub.onFirstCall().resolves(false);
+			fileExistsStub.onSecondCall().resolves(true);
+			let zfsStub = sinon.stub(Zotero.Sync.Storage.Mode.ZFS.prototype, 'downloadFile')
+				.callsFake(async function () {
+					item.attachmentSyncState = 'in_sync';
+					await item.saveTx({ skipAll: true });
+					return new Zotero.Sync.Storage.Result({ localChanges: true });
+				});
+
+			try {
+				let request = new Zotero.Sync.Storage.Request({
+					type: 'download',
+					libraryID: group.libraryID,
+					name: item.libraryKey,
+					onStart: request => profiledController.downloadFile(request)
+				});
+				let result = await request.start();
+
+				assert.isTrue(initStub.calledOnce);
+				assert.isTrue(metadataStub.calledOnce);
+				assert.isTrue(zfsStub.calledOnce);
+				assert.isTrue(result.localChanges);
+				assert.isTrue(result.fileSyncRequired);
+				assert.equal(
+					Zotero.Items.get(item.id).attachmentSyncState,
+					Zotero.Sync.Storage.Local.SYNC_STATE_TO_UPLOAD
+				);
+			}
+			finally {
+				zfsStub.restore();
+				fileExistsStub.restore();
+				metadataStub.restore();
+				initStub.restore();
+				await item.eraseTx({ skipEditCheck: true });
+				await group.eraseTx({ skipDeleteLog: true });
+			}
+		})
 		
 		it("should handle a remotely failing .prop file", async function () {
 			var engine = await setup();

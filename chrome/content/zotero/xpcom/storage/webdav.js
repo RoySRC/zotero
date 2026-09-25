@@ -30,6 +30,7 @@ if (!Zotero.Sync.Storage.Mode) {
 
 Zotero.Sync.Storage.Mode.WebDAV = function (options) {
 	this.options = options || {};
+	this.apiClient = this.options.apiClient;
 	this.libraryID = this.options.libraryID;
 	this.profileID = this.options.profileID
 		|| (this.libraryID !== undefined
@@ -529,6 +530,7 @@ Zotero.Sync.Storage.Mode.WebDAV.prototype = {
 		}
 		
 		var url = profile ? profile.url : Zotero.Prefs.get('sync.storage.url');
+		url = Zotero.Sync.Storage.Profiles._normalizeURL(url);
 		if (!url) {
 			throw new this.VerificationError("NO_URL");
 		}
@@ -558,7 +560,13 @@ Zotero.Sync.Storage.Mode.WebDAV.prototype = {
 			}
 			throw e;
 		}
-		this._rootURI = io.newURI(spec + "zotero/", null, null);
+		let rootPath = this.libraryID !== undefined
+			? Zotero.Sync.Storage.Profiles.getWebDAVFileRootPathForLibrary(
+				this.libraryID,
+				this.profileID
+			)
+			: 'zotero/';
+		this._rootURI = io.newURI(spec + rootPath, null, null);
 		Zotero.HTTP.CookieBlocker.addURL(this._rootURI.spec);
 	},
 	
@@ -655,6 +663,11 @@ Zotero.Sync.Storage.Mode.WebDAV.prototype = {
 		}
 		
 		if (!metadata) {
+			let result = await this._downloadZFSBootstrapFile(request, item);
+			if (result) {
+				return result;
+			}
+
 			Zotero.debug("Remote file not found for item " + item.libraryKey);
 			item.attachmentSyncState = "in_sync";
 			await item.saveTx({ skipAll: true });
@@ -755,6 +768,36 @@ Zotero.Sync.Storage.Mode.WebDAV.prototype = {
 				Zotero.logError(e);
 				reject(new Error(Zotero.Sync.Storage.defaultError));
 			}
+		});
+	},
+
+
+	async _downloadZFSBootstrapFile(request, item) {
+		if (!this.profileID || !this.apiClient) {
+			return false;
+		}
+
+		Zotero.debug(`WebDAV file not found for ${item.libraryKey}; attempting one-time `
+			+ "Zotero Storage migration download");
+
+		let hadFile = await item.fileExists();
+		let zfs = new Zotero.Sync.Storage.Mode.ZFS({
+			apiClient: this.apiClient,
+			maxS3ConsecutiveFailures: 2
+		});
+		let result = await zfs.downloadFile(request);
+		if (!request.isRunning()) {
+			return result;
+		}
+		if (!hadFile && !(await item.fileExists())) {
+			return result;
+		}
+
+		item.attachmentSyncState = "to_upload";
+		await item.saveTx({ skipAll: true });
+		return new Zotero.Sync.Storage.Result({
+			localChanges: true,
+			fileSyncRequired: true
 		});
 	},
 	
@@ -1708,6 +1751,12 @@ Zotero.Sync.Storage.Mode.WebDAV.prototype = {
 	 * Create a Zotero directory on the storage server
 	 */
 	_createServerDirectory: function () {
+		if (this.libraryID !== undefined && this.profileID) {
+			return Zotero.Sync.Storage.Profiles.ensureWebDAVFileDirectoriesForLibrary(
+				this.libraryID,
+				this.profileID
+			);
+		}
 		return Zotero.HTTP.request(
 			"MKCOL",
 			this.rootURI,
