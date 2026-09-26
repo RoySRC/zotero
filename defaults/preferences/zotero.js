@@ -171,6 +171,8 @@ pref("extensions.zotero.streaming.enabled", true);
 pref("extensions.zotero.sync.autoSync", true);
 pref("extensions.zotero.sync.server.username", "");
 pref("extensions.zotero.sync.server.compressData", true);
+pref("extensions.zotero.sync.metadata.backend", "zotero");
+pref("extensions.zotero.sync.metadata.postgresql.url", "");
 pref("extensions.zotero.sync.storage.enabled", true);
 pref("extensions.zotero.sync.storage.protocol", "zotero");
 pref("extensions.zotero.sync.storage.verified", false);

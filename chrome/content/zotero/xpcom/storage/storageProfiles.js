@@ -35,7 +35,6 @@ if (!Zotero.Sync.Storage) {
 Zotero.Sync.Storage.Profiles = {
 	_profilesPref: 'sync.storage.webdavProfiles',
 	_libraryProfilesPref: 'sync.storage.libraryProfiles',
-	_metadataLibrariesPref: 'sync.storage.webdavMetadataLibraries',
 	_webDAVProjectLibrariesPref: 'sync.storage.webdavProjectLibraries',
 	_reservedProfileIDs: new Set(['__proto__', 'prototype', 'constructor']),
 
@@ -63,6 +62,17 @@ Zotero.Sync.Storage.Profiles = {
 
 	_setPrefObject(pref, value) {
 		Zotero.Prefs.set(pref, JSON.stringify(value));
+	},
+
+	_getCleanObject(value) {
+		let object = Object.create(null);
+		if (!value || typeof value != 'object' || Array.isArray(value)) {
+			return object;
+		}
+		for (let [key, val] of Object.entries(value)) {
+			object[key] = val;
+		}
+		return object;
 	},
 
 	_hasOwn(object, key) {
@@ -260,6 +270,201 @@ Zotero.Sync.Storage.Profiles = {
 		return this._getPrefObject(this._profilesPref);
 	},
 
+	async getSyncSettingsBundle(options = {}) {
+		let webdavProfiles = this.getWebDAVProfiles();
+		let bundle = {
+			version: 1,
+			fileStorage: {
+				global: {
+					enabled: !!Zotero.Prefs.get('sync.storage.enabled'),
+					protocol: Zotero.Prefs.get('sync.storage.protocol') || '',
+					scheme: Zotero.Prefs.get('sync.storage.scheme') || '',
+					url: Zotero.Prefs.get('sync.storage.url') || '',
+					username: Zotero.Prefs.get('sync.storage.username') || '',
+					groupsEnabled: !!Zotero.Prefs.get('sync.storage.groups.enabled'),
+					downloadModePersonal: Zotero.Prefs.get('sync.storage.downloadMode.personal') || '',
+					downloadModeGroups: Zotero.Prefs.get('sync.storage.downloadMode.groups') || ''
+				},
+				webdavProfiles,
+				libraryProfiles: this._getPrefObject(this._libraryProfilesPref),
+				webdavProjectLibraries: this._getPrefObject(this._webDAVProjectLibrariesPref)
+			}
+		};
+
+		if (!options.includeSecrets) {
+			return bundle;
+		}
+
+		if (Zotero.Prefs.get('sync.storage.protocol') == 'webdav') {
+			try {
+				let password = await Zotero.Sync.Runner.getStorageController('webdav').getPassword();
+				if (password) {
+					bundle.fileStorage.global.password = password;
+				}
+			}
+			catch (e) {
+				Zotero.logError(e);
+			}
+		}
+
+		for (let profileID of Object.keys(webdavProfiles)) {
+			try {
+				let controller = new Zotero.Sync.Storage.Mode.WebDAV({ profileID });
+				let password = await controller.getPassword();
+				if (password) {
+					webdavProfiles[profileID].password = password;
+				}
+			}
+			catch (e) {
+				Zotero.logError(e);
+			}
+		}
+
+		return bundle;
+	},
+
+	async applySyncSettingsBundle(settings = {}) {
+		let fileStorage = settings.fileStorage || settings;
+		if (!fileStorage || typeof fileStorage != 'object') {
+			return;
+		}
+
+		let global = fileStorage.global;
+		if (global && typeof global == 'object' && !Array.isArray(global)) {
+			if (global.enabled !== undefined) {
+				Zotero.Prefs.set('sync.storage.enabled', !!global.enabled);
+			}
+			if (global.protocol !== undefined && ['zotero', 'webdav', ''].includes(global.protocol)) {
+				Zotero.Prefs.set('sync.storage.protocol', global.protocol);
+			}
+			if (global.scheme !== undefined && ['http', 'https', ''].includes(global.scheme)) {
+				Zotero.Prefs.set('sync.storage.scheme', global.scheme);
+			}
+			if (global.url !== undefined) {
+				Zotero.Prefs.set('sync.storage.url', this._normalizeURL(global.url));
+			}
+			if (global.username !== undefined) {
+				Zotero.Prefs.set('sync.storage.username', `${global.username || ''}`);
+			}
+			if (global.groupsEnabled !== undefined) {
+				Zotero.Prefs.set('sync.storage.groups.enabled', !!global.groupsEnabled);
+			}
+			if (global.downloadModePersonal !== undefined) {
+				Zotero.Prefs.set(
+					'sync.storage.downloadMode.personal',
+					`${global.downloadModePersonal || ''}`
+				);
+			}
+			if (global.downloadModeGroups !== undefined) {
+				Zotero.Prefs.set(
+					'sync.storage.downloadMode.groups',
+					`${global.downloadModeGroups || ''}`
+				);
+			}
+			if (global.password !== undefined) {
+				await Zotero.Sync.Runner.getStorageController('webdav')
+					.setPassword(`${global.password || ''}`);
+			}
+		}
+
+		let profilePasswords = Object.create(null);
+		if (fileStorage.webdavProfiles) {
+			let profiles = Object.create(null);
+			for (let [profileID, profile] of Object.entries(
+				this._getCleanObject(fileStorage.webdavProfiles)
+			)) {
+				try {
+					profileID = this._normalizeProfileID(profileID);
+				}
+				catch (e) {
+					Zotero.logError(e);
+					continue;
+				}
+				if (!profile || typeof profile != 'object' || Array.isArray(profile)) {
+					continue;
+				}
+				let scheme = ['http', 'https'].includes(profile.scheme)
+					? profile.scheme
+					: 'https';
+				profiles[profileID] = {
+					type: 'webdav',
+					scheme,
+					url: this._normalizeURL(profile.url),
+					username: `${profile.username || ''}`,
+					verified: !!profile.verified
+				};
+				if (profile.password !== undefined) {
+					profilePasswords[profileID] = `${profile.password || ''}`;
+				}
+			}
+			this._setPrefObject(this._profilesPref, profiles);
+		}
+
+		for (let [profileID, password] of Object.entries(profilePasswords)) {
+			try {
+				let controller = new Zotero.Sync.Storage.Mode.WebDAV({ profileID });
+				await controller.setPassword(password);
+			}
+			catch (e) {
+				Zotero.logError(e);
+			}
+		}
+
+		if (fileStorage.libraryProfiles) {
+			let profiles = this.getWebDAVProfiles();
+			let assignments = Object.create(null);
+			for (let [libraryKey, profileID] of Object.entries(
+				this._getCleanObject(fileStorage.libraryProfiles)
+			)) {
+				try {
+					profileID = this._normalizeProfileID(profileID);
+				}
+				catch (e) {
+					Zotero.logError(e);
+					continue;
+				}
+				if (!this._hasOwn(profiles, profileID)) {
+					continue;
+				}
+				assignments[libraryKey] = profileID;
+			}
+			this._setPrefObject(this._libraryProfilesPref, assignments);
+		}
+
+		if (fileStorage.webdavProjectLibraries) {
+			let profiles = this.getWebDAVProfiles();
+			let projects = Object.create(null);
+			for (let [libraryKey, project] of Object.entries(
+				this._getCleanObject(fileStorage.webdavProjectLibraries)
+			)) {
+				if (!project || typeof project != 'object' || Array.isArray(project)) {
+					continue;
+				}
+				let profileID = project.profileID;
+				try {
+					profileID = profileID ? this._normalizeProfileID(profileID) : '';
+				}
+				catch (e) {
+					Zotero.logError(e);
+					continue;
+				}
+				if (profileID && !this._hasOwn(profiles, profileID)) {
+					continue;
+				}
+				projects[libraryKey] = {
+					name: `${project.name || ''}`,
+					profileID,
+					created: project.created || Math.floor(Date.now() / 1000)
+				};
+			}
+			this._setPrefObject(this._webDAVProjectLibrariesPref, projects);
+		}
+
+		if (Zotero.Sync.Runner) {
+			Zotero.Sync.Runner.resetStorageController('webdav');
+		}
+	},
+
 	getWebDAVProfile(profileID) {
 		profileID = this._normalizeProfileID(profileID);
 		let profiles = this.getWebDAVProfiles();
@@ -366,15 +571,12 @@ Zotero.Sync.Storage.Profiles = {
 		this._setPrefObject(this._profilesPref, profiles);
 
 		let originalAssignments = this._getPrefObject(this._libraryProfilesPref);
-		let metadataLibraries = this._getPrefObject(this._metadataLibrariesPref);
 		for (let key in assignments) {
 			if (assignments[key] == profileID) {
 				delete assignments[key];
-				delete metadataLibraries[key];
 			}
 		}
 		this._setPrefObject(this._libraryProfilesPref, assignments);
-		this._setPrefObject(this._metadataLibrariesPref, metadataLibraries);
 
 		if (options.resetSyncState !== false) {
 			await this._resetSyncStatesForAssignedLibraries(profileID, originalAssignments);
@@ -408,35 +610,6 @@ Zotero.Sync.Storage.Profiles = {
 	getWebDAVProfileForLibrary(libraryID) {
 		let profileID = this.getLibraryProfileID(libraryID);
 		return profileID ? this.getWebDAVProfile(profileID) : null;
-	},
-
-	isWebDAVMetadataEnabledForLibrary(libraryID) {
-		let libraries = this._getPrefObject(this._metadataLibrariesPref);
-		return !!libraries[this._getLibraryProfileKey(libraryID)];
-	},
-
-	getWebDAVMetadataProfileForLibrary(libraryID) {
-		if (!this.isWebDAVMetadataEnabledForLibrary(libraryID)) {
-			return null;
-		}
-		return this.getWebDAVProfileForLibrary(libraryID);
-	},
-
-	setWebDAVMetadataEnabledForLibrary(libraryID, enabled) {
-		let profile = this.getWebDAVProfileForLibrary(libraryID);
-		if (enabled && !profile) {
-			throw new Error(`No WebDAV profile assigned to library ${libraryID}`);
-		}
-
-		let libraries = this._getPrefObject(this._metadataLibrariesPref);
-		let key = this._getLibraryProfileKey(libraryID);
-		if (enabled) {
-			libraries[key] = true;
-		}
-		else {
-			delete libraries[key];
-		}
-		this._setPrefObject(this._metadataLibrariesPref, libraries);
 	},
 
 	_normalizeWebDAVProjectName(name) {
@@ -642,7 +815,6 @@ Zotero.Sync.Storage.Profiles = {
 			let projects = this.getWebDAVProjectLibraries();
 			projects[libraryKey].profileID = profileID;
 			this._setPrefObject(this._webDAVProjectLibrariesPref, projects);
-			this.setWebDAVMetadataEnabledForLibrary(libraryID, true);
 		}
 
 		if (options.resetSyncState !== false) {
@@ -667,7 +839,6 @@ Zotero.Sync.Storage.Profiles = {
 		let profileID = assignments[key];
 		delete assignments[key];
 		this._setPrefObject(this._libraryProfilesPref, assignments);
-		this.setWebDAVMetadataEnabledForLibrary(libraryID, false);
 
 		if (options.resetSyncState !== false) {
 			await Zotero.Sync.Storage.Local.resetAllSyncStates(libraryID);
@@ -684,11 +855,6 @@ Zotero.Sync.Storage.Profiles = {
 		if (assignments[libraryProfileKey]) {
 			delete assignments[libraryProfileKey];
 			this._setPrefObject(this._libraryProfilesPref, assignments);
-		}
-		let metadataLibraries = this._getPrefObject(this._metadataLibrariesPref);
-		if (metadataLibraries[libraryProfileKey]) {
-			delete metadataLibraries[libraryProfileKey];
-			this._setPrefObject(this._metadataLibrariesPref, metadataLibraries);
 		}
 	},
 
@@ -729,54 +895,5 @@ Zotero.Sync.Storage.Profiles = {
 	async configureWebDAVForLibrary(libraryID, profileID, options) {
 		await this.setWebDAVProfile(profileID, options);
 		await this.setLibraryProfile(libraryID, profileID);
-		if (options && options.metadataSync) {
-			this.setWebDAVMetadataEnabledForLibrary(libraryID, true);
-		}
-	},
-
-	async migrateLibraryToWebDAV(libraryID, options = {}) {
-		let profile = this.getWebDAVProfileForLibrary(libraryID);
-		if (!profile) {
-			throw new Error(`No WebDAV profile assigned to library ${libraryID}`);
-		}
-
-		let library = Zotero.Libraries.get(libraryID);
-		if (!library.editable) {
-			throw new Error(`Library ${libraryID} is not editable`);
-		}
-
-		await this.ensureWebDAVFileDirectoriesForLibrary(libraryID, profile.id);
-
-		await Zotero.DB.executeTransaction(async function () {
-			await Zotero.Sync.Data.Local.clearCacheForLibrary(libraryID);
-			await Zotero.Sync.Data.Local.clearQueueForLibrary(libraryID);
-			await Zotero.Sync.Data.Local.clearDeleteLogForLibrary(libraryID);
-
-			await Zotero.SyncedSettings.loadAll(libraryID);
-			await Zotero.SyncedSettings.markAllAsUnsynced(libraryID);
-
-			for (let objectType of Zotero.DataObjectUtilities.getTypesForLibrary(libraryID)) {
-				let objectsClass = Zotero.DataObjectUtilities
-					.getObjectsClassForObjectType(objectType);
-				let ids = await objectsClass.getAllIDs(libraryID);
-				if (ids.length) {
-					await objectsClass.updateVersion(ids, 0);
-					await objectsClass.updateSynced(ids, false);
-				}
-			}
-
-			library.libraryVersion = -1;
-			library.storageVersion = -1;
-			await library.save({ skipNotifier: true });
-		});
-
-		if (options.resetFileSync !== false) {
-			await Zotero.Sync.Storage.Local.resetAllSyncStates(libraryID);
-		}
-
-		this.setWebDAVMetadataEnabledForLibrary(libraryID, true);
-		if (Zotero.Sync.Runner) {
-			Zotero.Sync.Runner.resetStorageController('webdav', { profileID: profile.id });
-		}
 	}
 };

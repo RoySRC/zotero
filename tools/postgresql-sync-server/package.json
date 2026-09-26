@@ -1,0 +1,15 @@
+{
+  "name": "zotero-postgresql-sync-server",
+  "version": "0.1.0",
+  "private": true,
+	"type": "module",
+	"scripts": {
+		"start": "node src/server.mjs",
+		"import:zotero": "node src/import-from-zotero.mjs",
+		"user:password": "node src/set-user-password.mjs"
+	},
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}

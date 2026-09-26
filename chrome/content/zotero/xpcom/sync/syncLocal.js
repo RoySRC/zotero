@@ -303,6 +303,9 @@ Zotero.Sync.Data.Local = {
 				Zotero.Prefs.clear('sync.storage.downloadMode.groups');
 				Zotero.Prefs.clear('sync.storage.groups.enabled');
 				Zotero.Prefs.clear('sync.storage.downloadMode.personal');
+				await Zotero.Sync.Metadata.clearPostgreSQLAPIKey();
+				Zotero.Prefs.clear('sync.metadata.backend');
+				Zotero.Prefs.clear('sync.metadata.postgresql.url');
 				Zotero.Prefs.clear('sync.storage.username');
 				Zotero.Prefs.clear('sync.storage.url');
 				Zotero.Prefs.clear('sync.storage.scheme');

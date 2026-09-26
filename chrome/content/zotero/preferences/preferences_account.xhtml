@@ -50,6 +50,10 @@
 			</hbox>
 		</vbox>
 
+		<vbox id="sync-postgresql-linked" hidden="true">
+			<description data-l10n-id="preferences-sync-metadata-postgresql-active"/>
+		</vbox>
+
 		<vbox id="account-linked" hidden="true">
 			<html:div class="form-grid">
 				<label value="&zotero.preferences.sync.username;"/>
@@ -88,6 +92,86 @@
 				</hbox>
 			</vbox>
 		</vbox>
+	</vbox>
+
+	<vbox class="main-section" id="metadata-sync-section">
+		<html:h1 data-l10n-id="preferences-sync-metadata-heading"/>
+		<description data-l10n-id="preferences-sync-metadata-description"/>
+		<separator class="thin"/>
+
+		<groupbox>
+			<html:div class="form-grid">
+				<label control="metadata-backend"
+					data-l10n-id="preferences-sync-metadata-backend"/>
+				<hbox align="center">
+					<menulist id="metadata-backend"
+						oncommand="Zotero_Preferences.Sync.onMetadataBackendChange()"
+						native="true">
+						<menupopup>
+							<menuitem data-l10n-id="preferences-sync-metadata-backend-zotero"
+								value="zotero"/>
+							<menuitem data-l10n-id="preferences-sync-metadata-backend-postgresql"
+								value="postgresql"/>
+						</menupopup>
+					</menulist>
+					<button id="metadata-save"
+						data-l10n-id="preferences-sync-metadata-save"
+						oncommand="Zotero_Preferences.Sync.saveMetadataSyncSettings()"/>
+				</hbox>
+			</html:div>
+
+			<vbox id="metadata-postgresql-settings" style="margin-top: .5em">
+				<html:div class="form-grid">
+					<label control="metadata-postgresql-url"
+						data-l10n-id="preferences-sync-metadata-postgresql-url"/>
+					<hbox>
+						<html:input id="metadata-postgresql-url"
+							style="flex: 1;"
+							data-l10n-id="preferences-sync-metadata-postgresql-url-placeholder"
+							onkeypress="Zotero_Preferences.Sync.onMetadataLoginKeyPress(event)"/>
+					</hbox>
+
+					<label control="metadata-postgresql-username"
+						data-l10n-id="preferences-sync-metadata-postgresql-username"/>
+					<hbox>
+						<html:input id="metadata-postgresql-username"
+							data-l10n-id="preferences-sync-metadata-postgresql-username-placeholder"
+							onkeypress="Zotero_Preferences.Sync.onMetadataLoginKeyPress(event)"/>
+					</hbox>
+
+					<label control="metadata-postgresql-password"
+						data-l10n-id="preferences-sync-metadata-postgresql-password"/>
+					<hbox>
+						<html:input id="metadata-postgresql-password"
+							type="password"
+							data-l10n-id="preferences-sync-metadata-postgresql-password-placeholder"
+							onkeypress="Zotero_Preferences.Sync.onMetadataLoginKeyPress(event)"/>
+					</hbox>
+
+					<box/>
+					<hbox align="center">
+						<button id="metadata-postgresql-login"
+							data-l10n-id="preferences-sync-metadata-postgresql-login"
+							oncommand="Zotero_Preferences.Sync.loginPostgreSQLMetadataServer()"/>
+						<progressmeter id="metadata-progress" hidden="true"
+							mode="undetermined"/>
+					</hbox>
+				</html:div>
+			</vbox>
+
+			<vbox id="metadata-loading-panel" hidden="true"
+				style="margin-top: .8em; padding: .7em; border: 1px solid var(--fill-quinary); border-radius: 4px;">
+				<label data-l10n-id="preferences-sync-metadata-postgresql-loading-title"
+					style="font-weight: bold;"/>
+				<label id="metadata-loading-current"/>
+				<progressmeter id="metadata-loading-progress"
+					mode="undetermined"/>
+				<html:pre id="metadata-loading-log"
+					style="white-space: pre-wrap; user-select: text; max-height: 18em; overflow: auto; margin: .6em 0 0 0; font: menu;"/>
+			</vbox>
+
+			<label id="metadata-status" class="storage-profile-status"/>
+		</groupbox>
 	</vbox>
 
 	<vbox class="main-section" id="sync-settings-section" hidden="true">

@@ -40,11 +40,14 @@ Zotero_Preferences.Sync = {
 	_loginReject: null,
 	_pollTimerID: null,
 	_pollInterval: 3000,
+	_storageLibraryNotifierID: null,
+	_storageLibraryRefreshTimerID: null,
 
 	init: async function () {
 		this.storeLastStorageSettings();
 		this.updateStorageSettingsUI();
 		this.updateStorageSettingsGroupsUI();
+		await this.initMetadataSyncUI();
 
 		var username = Zotero.Users.getCurrentUsername() || Zotero.Prefs.get('sync.server.username') || " ";
 		var apiKey = await Zotero.Sync.Data.Local.getAPIKey();
@@ -56,11 +59,12 @@ Zotero_Preferences.Sync = {
 			document.getElementById('storage-password').value = pass;
 		}
 		this.initStorageProfilesUI();
+		this._registerStorageLibraryObserver();
 
 		if (apiKey) {
 			try {
 				var keyInfo = await Zotero.Sync.Runner.checkAccess(
-					Zotero.Sync.Runner.getAPIClient({apiKey}),
+					Zotero.Sync.Runner.getAPIClient({ apiKey, metadataBackend: false }),
 					{timeout: 5000, includeEmails: true}
 				);
 				this.displayFields(keyInfo.username, { emails: keyInfo.emails });
@@ -112,6 +116,58 @@ Zotero_Preferences.Sync = {
 		}
 	},
 
+	_registerStorageLibraryObserver: function () {
+		if (this._storageLibraryNotifierID) {
+			return;
+		}
+
+		this._storageLibraryNotifierID = Zotero.Notifier.registerObserver({
+			notify: (event, type) => {
+				if (type == 'sync' && event != 'finish') {
+					return;
+				}
+				this._scheduleStorageLibraryRefresh(`${event}:${type}`);
+			}
+		}, ['group', 'sync'], 'preferencesAccountStorageLibraries');
+
+		window.addEventListener('unload', () => {
+			if (this._storageLibraryNotifierID) {
+				Zotero.Notifier.unregisterObserver(this._storageLibraryNotifierID);
+				this._storageLibraryNotifierID = null;
+			}
+			if (this._storageLibraryRefreshTimerID) {
+				window.clearTimeout(this._storageLibraryRefreshTimerID);
+				this._storageLibraryRefreshTimerID = null;
+			}
+		}, { once: true });
+	},
+
+
+	_scheduleStorageLibraryRefresh: function (reason) {
+		if (!document.getElementById('storage-library-profile-list')) {
+			return;
+		}
+		if (this._storageLibraryRefreshTimerID) {
+			window.clearTimeout(this._storageLibraryRefreshTimerID);
+		}
+		this._storageLibraryRefreshTimerID = window.setTimeout(async () => {
+			this._storageLibraryRefreshTimerID = null;
+			try {
+				if (this._metadataLoadInProgress) {
+					this._appendMetadataLoadStatus('Refreshing library file-storage list', {
+						reason,
+						libraries: this._getLocalLibraryLoadSummary()
+					});
+				}
+				await this._refreshStorageProfileSections();
+			}
+			catch (e) {
+				Zotero.logError(e);
+			}
+		}, 250);
+	},
+
+
 	displayFields: function (username, { emails } = {}) {
 		let linkedUserID = Zotero.Users.getCurrentUserID();
 		let linkedUsername = Zotero.Users.getCurrentUsername()
@@ -120,10 +176,12 @@ Zotero_Preferences.Sync = {
 		let loggedIn = !!username;
 		let loggedOutLinked = !loggedIn && !!linkedUserID;
 		let linked = loggedIn || loggedOutLinked;
+		let postgreSQLMetadataEnabled = Zotero.Sync.Metadata.isPostgreSQLSyncEnabled();
 
-		document.getElementById('sync-unauthorized').hidden = linked;
+		document.getElementById('sync-unauthorized').hidden = linked || postgreSQLMetadataEnabled;
+		document.getElementById('sync-postgresql-linked').hidden = linked || !postgreSQLMetadataEnabled;
 		document.getElementById('account-linked').hidden = !linked;
-		document.getElementById('sync-settings-section').hidden = !loggedIn;
+		document.getElementById('sync-settings-section').hidden = !loggedIn && !postgreSQLMetadataEnabled;
 		document.getElementById('sync-reset').hidden = !loggedIn;
 
 		// Toggle logged-in vs logged-out elements within the linked container
@@ -242,7 +300,10 @@ Zotero_Preferences.Sync = {
 			// leaving an active key we can't use
 			if (result.apiKey) {
 				try {
-					await Zotero.Sync.Runner.getAPIClient({ apiKey: result.apiKey })
+					await Zotero.Sync.Runner.getAPIClient({
+						apiKey: result.apiKey,
+						metadataBackend: false
+					})
 						.deleteAPIKey();
 				}
 				catch (e2) {
@@ -253,7 +314,6 @@ Zotero_Preferences.Sync = {
 			this._showLoginDefault();
 			throw e;
 		}
-
 		// Handle secmod.db issue when storing the API key
 		// This can happen when people have a very old profile directory (e.g., from 2013)
 		try {
@@ -352,7 +412,7 @@ Zotero_Preferences.Sync = {
 	_startPolling: async function (sessionToken) {
 		let timeout = 10 * 60 * 1000; // 10 minutes
 		let startTime = Date.now();
-		let client = Zotero.Sync.Runner.getAPIClient();
+		let client = Zotero.Sync.Runner.getAPIClient({ metadataBackend: false });
 
 		while (true) {
 			// Wait before polling
@@ -473,6 +533,7 @@ Zotero_Preferences.Sync = {
 					await Zotero.File.putContentsAsync(resetDataDirFile, '');
 
 					await Zotero.Sync.Runner.deleteAPIKey();
+					await Zotero.Sync.Metadata.disablePostgreSQL();
 					Zotero.Prefs.clear('sync.server.username');
 					return Zotero.Utilities.Internal.quitZotero(true);
 				}
@@ -485,6 +546,7 @@ Zotero_Preferences.Sync = {
 		Zotero.Prefs.clear('sync.librariesToSync');
 		Zotero.Prefs.clear('reader.readAloudVoices');
 		await Zotero.Sync.Runner.deleteAPIKey();
+		await Zotero.Sync.Metadata.disablePostgreSQL();
 	},
 
 
@@ -527,6 +589,7 @@ Zotero_Preferences.Sync = {
 		let resetDataDirFile = PathUtils.join(Zotero.DataDirectory.dir, 'reset-data-directory');
 		await Zotero.File.putContentsAsync(resetDataDirFile, '');
 		Zotero.Prefs.set('reopenAccountPrefsOnRestart', true);
+		await Zotero.Sync.Metadata.disablePostgreSQL();
 		Zotero.Prefs.clear('sync.server.username');
 		Zotero.Utilities.Internal.quit(true);
 	},
@@ -651,7 +714,7 @@ Zotero_Preferences.Sync = {
 		var loadingLabel = Zotero.getString("zotero.preferences.sync.librariesToSync.loadingLibraries");
 		addRow(loadingLabel, "loading", false, false);
 
-		var apiKey = await Zotero.Sync.Data.Local.getAPIKey();
+		var apiKey = await this._getActiveMetadataAPIKey();
 		var client = Zotero.Sync.Runner.getAPIClient({ apiKey });
 		var groups = [];
 		try {
@@ -769,6 +832,488 @@ Zotero_Preferences.Sync = {
 		this.updateStorageProfilesUI();
 		this.updateLibraryStorageProfilesUI();
 		this.updateWebDAVProjectLibrariesUI();
+	},
+
+
+	initMetadataSyncUI: async function () {
+		let backend = Zotero.Sync.Metadata.getBackend();
+		document.getElementById('metadata-backend').value = backend;
+		document.getElementById('metadata-postgresql-url').value =
+			Zotero.Sync.Metadata.getPostgreSQLBaseURL();
+		document.getElementById('metadata-postgresql-username').value =
+			Zotero.Users.getCurrentUsername() || Zotero.Prefs.get('sync.server.username') || '';
+		document.getElementById('metadata-postgresql-password').value = '';
+		this.updateMetadataSyncUI();
+
+		if (backend == Zotero.Sync.Metadata.BACKEND_POSTGRESQL
+				&& await Zotero.Sync.Metadata.hasPostgreSQLAPIKey()) {
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-saved'
+			));
+		}
+	},
+
+
+	updateMetadataSyncUI: function () {
+		let backend = document.getElementById('metadata-backend').value
+			|| Zotero.Sync.Metadata.BACKEND_ZOTERO;
+		let usingPostgreSQL = backend == Zotero.Sync.Metadata.BACKEND_POSTGRESQL;
+		document.getElementById('metadata-postgresql-settings').hidden =
+			!usingPostgreSQL || !!this._metadataLoadInProgress;
+		document.getElementById('metadata-postgresql-login').disabled = !usingPostgreSQL;
+	},
+
+
+	onMetadataBackendChange: function () {
+		document.getElementById('metadata-loading-panel').hidden = true;
+		this._metadataLoadInProgress = false;
+		this.updateMetadataSyncUI();
+		this._setMetadataSyncStatus('');
+	},
+
+
+	onMetadataLoginKeyPress: async function (event) {
+		if (event.keyCode == 13) {
+			await this.loginPostgreSQLMetadataServer();
+		}
+	},
+
+
+	_formatMetadataMessage: function (id, args) {
+		return Zotero.ftl.formatValueSync(id, args);
+	},
+
+
+	_setMetadataSyncStatus: function (message, isError = false) {
+		let label = document.getElementById('metadata-status');
+		label.value = message || '';
+		label.classList.toggle('error', isError);
+	},
+
+
+	_setMetadataLoading: function (loading) {
+		this._metadataLoadInProgress = !!loading;
+		document.getElementById('metadata-loading-progress').hidden = !loading;
+		this.updateMetadataSyncUI();
+	},
+
+
+	_startMetadataLoadingStatus: function () {
+		this._metadataLoadStartedAt = Date.now();
+		let panel = document.getElementById('metadata-loading-panel');
+		let current = document.getElementById('metadata-loading-current');
+		let log = document.getElementById('metadata-loading-log');
+		panel.hidden = false;
+		current.value = '';
+		log.textContent = '';
+		this._setMetadataLoading(true);
+	},
+
+
+	_formatMetadataLoadElapsed: function () {
+		if (!this._metadataLoadStartedAt) {
+			return '+0ms';
+		}
+		return `+${Date.now() - this._metadataLoadStartedAt}ms`;
+	},
+
+
+	_sanitizeMetadataLoadValue: function (value) {
+		if (Array.isArray(value)) {
+			return value.map(val => this._sanitizeMetadataLoadValue(val));
+		}
+		if (!value || typeof value != 'object') {
+			return value;
+		}
+
+		let clean = {};
+		for (let [key, val] of Object.entries(value)) {
+			if (/password|apiKey|token|secret/i.test(key)) {
+				clean[key] = val ? '[present]' : '[empty]';
+				continue;
+			}
+			clean[key] = this._sanitizeMetadataLoadValue(val);
+		}
+		return clean;
+	},
+
+
+	_appendMetadataLoadStatus: function (phase, details = null) {
+		let current = document.getElementById('metadata-loading-current');
+		let log = document.getElementById('metadata-loading-log');
+		let line = `[${new Date().toISOString()} ${this._formatMetadataLoadElapsed()}] ${phase}`;
+		current.value = phase;
+		if (details !== null && details !== undefined) {
+			line += "\n" + JSON.stringify(this._sanitizeMetadataLoadValue(details), null, 2);
+		}
+		log.textContent += (log.textContent ? "\n\n" : "") + line;
+		log.scrollTop = log.scrollHeight;
+	},
+
+
+	_finishMetadataLoadingStatus: function (phase, details = null) {
+		if (phase) {
+			this._appendMetadataLoadStatus(phase, details);
+		}
+		this._setMetadataLoading(false);
+	},
+
+
+	_getLocalLibraryLoadSummary: function () {
+		let libraries = Zotero.Libraries.getAll();
+		let groupLibraries = libraries.filter(library => library.libraryType == 'group');
+		return {
+			totalLibraries: libraries.length,
+			groupLibraries: groupLibraries.length,
+			groups: groupLibraries.map(library => ({
+				libraryID: library.libraryID,
+				groupID: Zotero.Groups.getGroupIDFromLibraryID(library.libraryID),
+				name: library.name,
+				editable: !!library.editable,
+				filesEditable: !!library.filesEditable,
+				assignedWebDAVProfile:
+					Zotero.Sync.Storage.Profiles.getLibraryProfileID(library.libraryID) || null
+			}))
+		};
+	},
+
+
+	_summarizePostgreSQLSettings: function (settings) {
+		settings ||= {};
+		let fileStorage = settings.fileStorage || {};
+		let webdavProfiles = fileStorage.webdavProfiles || {};
+		let libraryProfiles = fileStorage.libraryProfiles || {};
+		let projectLibraries = fileStorage.webdavProjectLibraries || {};
+		return {
+			version: settings.version,
+			metadata: settings.metadata || null,
+			fileStorage: {
+				hasFileStorage: !!settings.fileStorage,
+				global: fileStorage.global ? {
+					enabled: !!fileStorage.global.enabled,
+					protocol: fileStorage.global.protocol || '',
+					scheme: fileStorage.global.scheme || '',
+					url: fileStorage.global.url || '',
+					username: fileStorage.global.username || '',
+					groupsEnabled: !!fileStorage.global.groupsEnabled,
+					downloadModePersonal: fileStorage.global.downloadModePersonal || '',
+					downloadModeGroups: fileStorage.global.downloadModeGroups || '',
+					hasPassword: !!fileStorage.global.password
+				} : null,
+				webdavProfiles: Object.fromEntries(Object.entries(webdavProfiles)
+					.map(([profileID, profile]) => [profileID, {
+						scheme: profile.scheme || '',
+						url: profile.url || '',
+						username: profile.username || '',
+						verified: !!profile.verified,
+						hasPassword: !!profile.password
+					}])),
+				libraryProfileKeys: Object.keys(libraryProfiles),
+				webdavProjectLibraryKeys: Object.keys(projectLibraries)
+			}
+		};
+	},
+
+
+	_refreshAccountAndSyncUI: async function () {
+		if (Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()
+				&& await Zotero.Sync.Metadata.hasPostgreSQLAPIKey()) {
+			let username = Zotero.Users.getCurrentUsername()
+				|| Zotero.Prefs.get('sync.server.username')
+				|| "";
+			this.displayFields(username, { emails: Zotero.Users.getCurrentEmails() });
+			return;
+		}
+
+		let apiKey = await Zotero.Sync.Data.Local.getAPIKey();
+		let username = apiKey
+			? (Zotero.Users.getCurrentUsername() || Zotero.Prefs.get('sync.server.username') || "")
+			: "";
+		this.displayFields(username, {
+			emails: apiKey ? Zotero.Users.getCurrentEmails() : undefined
+		});
+	},
+
+
+	_refreshStorageProfileSections: async function () {
+		this.initStorageProfilesUI();
+		await this.updateStorageSettingsUI({ unverify: false });
+		this.updateStorageSettingsGroupsUI();
+	},
+
+
+	_applyPostgreSQLSyncSettings: async function (settings) {
+		if (!settings) {
+			return false;
+		}
+		await Zotero.Sync.Metadata.applyPostgreSQLSyncSettings(settings);
+		await this._refreshStorageProfileSections();
+		return true;
+	},
+
+
+	_shouldSyncAfterPostgreSQLLogin: function (loginContext, result) {
+		if (!loginContext.wasPostgreSQLMetadataEnabled) {
+			return {
+				sync: true,
+				reason: 'PostgreSQL metadata sync was just enabled'
+			};
+		}
+		if (loginContext.previousPostgreSQLURL != Zotero.Sync.Metadata.getPostgreSQLBaseURL()) {
+			return {
+				sync: true,
+				reason: 'PostgreSQL metadata server URL changed'
+			};
+		}
+		if (loginContext.previousUserID && loginContext.previousUserID != result.userID) {
+			return {
+				sync: true,
+				reason: 'Logged-in metadata account changed'
+			};
+		}
+		if (!loginContext.previousUserID) {
+			return {
+				sync: true,
+				reason: 'Local metadata has not been populated yet'
+			};
+		}
+		return {
+			sync: false,
+			reason: 'Account and PostgreSQL server are unchanged'
+		};
+	},
+
+
+	_syncAndRefreshAfterPostgreSQLLogin: async function (loginContext, result) {
+		let syncDecision = this._shouldSyncAfterPostgreSQLLogin(loginContext, result);
+		if (!syncDecision.sync) {
+			this._appendMetadataLoadStatus('Skipping full metadata sync', {
+				reason: syncDecision.reason,
+				localLibraries: this._getLocalLibraryLoadSummary()
+			});
+			this._appendMetadataLoadStatus('Refreshing account and storage controls');
+			await this._refreshStorageProfileSections();
+			this._appendMetadataLoadStatus('Account and storage controls refreshed', {
+				afterRefresh: this._getLocalLibraryLoadSummary()
+			});
+			return;
+		}
+
+		this._setMetadataSyncStatus(this._formatMetadataMessage(
+			'preferences-sync-metadata-postgresql-syncing'
+		));
+		this._appendMetadataLoadStatus('Starting metadata sync', {
+			reason: syncDecision.reason,
+			beforeSync: this._getLocalLibraryLoadSummary()
+		});
+		await Zotero.Sync.Runner.sync({ background: true });
+		this._appendMetadataLoadStatus('Metadata sync finished', {
+			afterSync: this._getLocalLibraryLoadSummary()
+		});
+		this._appendMetadataLoadStatus('Refreshing account and storage controls');
+		await this._refreshStorageProfileSections();
+		this._appendMetadataLoadStatus('Account and storage controls refreshed', {
+			afterRefresh: this._getLocalLibraryLoadSummary()
+		});
+	},
+
+
+	_savePostgreSQLSyncSettingsIfEnabled: async function () {
+		if (!Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()) {
+			return;
+		}
+		try {
+			await Zotero.Sync.Metadata.savePostgreSQLSyncSettings();
+		}
+		catch (e) {
+			Zotero.logError(e);
+		}
+	},
+
+
+	_getActiveMetadataAPIKey: function () {
+		if (Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()) {
+			return Zotero.Sync.Metadata.getPostgreSQLAPIKey();
+		}
+		return Zotero.Sync.Data.Local.getAPIKey();
+	},
+
+
+	saveMetadataSyncSettings: async function ({ silent = false } = {}) {
+		let backend = document.getElementById('metadata-backend').value
+			|| Zotero.Sync.Metadata.BACKEND_ZOTERO;
+
+		if (backend == Zotero.Sync.Metadata.BACKEND_ZOTERO) {
+			await Zotero.Sync.Metadata.disablePostgreSQL();
+			await this._refreshAccountAndSyncUI();
+			if (!silent) {
+				this._setMetadataSyncStatus(this._formatMetadataMessage(
+					'preferences-sync-metadata-zotero-saved'
+				));
+			}
+			return true;
+		}
+
+		let urlField = document.getElementById('metadata-postgresql-url');
+		let url = urlField.value.trim();
+		if (!url) {
+			urlField.focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-enter-url'
+			), true);
+			return false;
+		}
+		if (!(await Zotero.Sync.Metadata.hasPostgreSQLAPIKey())) {
+			document.getElementById('metadata-postgresql-username').focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-login-required'
+			), true);
+			return false;
+		}
+
+		let options = { url };
+
+		try {
+			await Zotero.Sync.Metadata.configurePostgreSQL(options);
+		}
+		catch (e) {
+			Zotero.logError(e);
+			this._setMetadataSyncStatus(e.message, true);
+			if (!silent) {
+				Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			}
+			return false;
+		}
+
+		urlField.value = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
+		await this._refreshAccountAndSyncUI();
+		if (!silent) {
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-saved'
+			));
+		}
+		return true;
+	},
+
+
+	loginPostgreSQLMetadataServer: async function () {
+		let loginButton = document.getElementById('metadata-postgresql-login');
+		let progressMeter = document.getElementById('metadata-progress');
+		let urlField = document.getElementById('metadata-postgresql-url');
+		let usernameField = document.getElementById('metadata-postgresql-username');
+		let passwordField = document.getElementById('metadata-postgresql-password');
+		let url;
+		try {
+			url = Zotero.Sync.Metadata.normalizePostgreSQLBaseURL(urlField.value);
+		}
+		catch (e) {
+			urlField.focus();
+			this._setMetadataSyncStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			return;
+		}
+
+		let username = usernameField.value.trim();
+		let password = passwordField.value;
+		let loginContext = {
+			wasPostgreSQLMetadataEnabled: Zotero.Sync.Metadata.isPostgreSQLSyncEnabled(),
+			previousPostgreSQLURL: Zotero.Sync.Metadata.getPostgreSQLBaseURL(),
+			previousUserID: Zotero.Users.getCurrentUserID(),
+			previousLibraryCount: Zotero.Libraries.getAll().length,
+			previousGroupCount: Zotero.Groups.getAll().length
+		};
+		if (!username) {
+			usernameField.focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-enter-username'
+			), true);
+			return;
+		}
+		if (!password) {
+			passwordField.focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-enter-password'
+			), true);
+			return;
+		}
+
+		this._startMetadataLoadingStatus();
+		this._appendMetadataLoadStatus('Starting PostgreSQL metadata login', {
+			serverURL: url,
+			username,
+			passwordProvided: !!password,
+			currentBackend: Zotero.Sync.Metadata.getBackend(),
+			currentLocalLibraries: this._getLocalLibraryLoadSummary()
+		});
+		loginButton.disabled = true;
+		progressMeter.hidden = false;
+		try {
+			this._appendMetadataLoadStatus('Authenticating with PostgreSQL metadata server', {
+				endpoint: url + 'auth/login',
+				method: 'POST'
+			});
+			let result = await Zotero.Sync.Metadata.loginPostgreSQL({ url, username, password });
+			this._appendMetadataLoadStatus('Authentication succeeded', {
+				userID: result.userID,
+				username: result.username,
+				displayName: result.displayName,
+				emailCount: Array.isArray(result.emails) ? result.emails.length : 0,
+				hasAPIKey: !!result.apiKey,
+				syncSettings: this._summarizePostgreSQLSettings(result.syncSettings)
+			});
+			this._appendMetadataLoadStatus('Checking local account identity compatibility', {
+				userID: result.userID,
+				username: result.username
+			});
+			let ok = await Zotero.Sync.Data.Local.checkUser(
+				window,
+				result.userID,
+				result.username,
+				result.displayName,
+				result.emails
+			);
+			if (!ok) {
+				this._finishMetadataLoadingStatus('Account identity check was cancelled');
+				await Zotero.Sync.Metadata.clearPostgreSQLAPIKey();
+				return;
+			}
+			this._appendMetadataLoadStatus('Account identity accepted');
+			Zotero.Prefs.set('sync.server.username', result.username);
+			urlField.value = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
+			usernameField.value = result.username;
+			passwordField.value = '';
+			this._appendMetadataLoadStatus('Applying sync settings from PostgreSQL', {
+				settings: this._summarizePostgreSQLSettings(result.syncSettings)
+			});
+			await this._applyPostgreSQLSyncSettings(result.syncSettings);
+			this._appendMetadataLoadStatus('Sync settings applied locally', {
+				localLibraries: this._getLocalLibraryLoadSummary()
+			});
+			this.displayFields(result.username, { emails: result.emails });
+			await this._syncAndRefreshAfterPostgreSQLLogin(loginContext, result);
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-login-succeeded',
+				{ username: result.username }
+			));
+			this._finishMetadataLoadingStatus('PostgreSQL account settings loaded successfully', {
+				username: result.username,
+				finalLocalLibraries: this._getLocalLibraryLoadSummary()
+			});
+		}
+		catch (e) {
+			Zotero.logError(e);
+			this._finishMetadataLoadingStatus('PostgreSQL account settings load failed', {
+				name: e.name,
+				message: e.message,
+				stack: e.stack || ''
+			});
+			this._setMetadataSyncStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+		}
+		finally {
+			loginButton.disabled = false;
+			progressMeter.hidden = true;
+		}
 	},
 
 
@@ -959,6 +1504,7 @@ Zotero_Preferences.Sync = {
 
 		document.getElementById('storage-profile-password').value = '';
 		this.updateStorageProfilesUI(profileID);
+		await this._savePostgreSQLSyncSettingsIfEnabled();
 		if (!silent) {
 			this._setStorageProfileStatus(this._formatStorageMessage(
 				'preferences-sync-fileSyncing-profile-saved',
@@ -1014,6 +1560,7 @@ Zotero_Preferences.Sync = {
 
 		if (success) {
 			this.updateStorageProfilesUI(profileID);
+			await this._savePostgreSQLSyncSettingsIfEnabled();
 			this._setStorageProfileStatus(this._formatStorageMessage(
 				'preferences-sync-fileSyncing-profile-verified',
 				{ profileID }
@@ -1059,6 +1606,7 @@ Zotero_Preferences.Sync = {
 			return;
 		}
 		this.updateStorageProfilesUI();
+		await this._savePostgreSQLSyncSettingsIfEnabled();
 		this._setStorageProfileStatus(this._formatStorageMessage(
 			'preferences-sync-fileSyncing-profile-deleted',
 			{ profileID }
@@ -1153,6 +1701,7 @@ Zotero_Preferences.Sync = {
 			{ name }
 		));
 		this.updateStorageProfilesUI(profileID);
+		await this._savePostgreSQLSyncSettingsIfEnabled();
 	},
 
 
@@ -1185,6 +1734,7 @@ Zotero_Preferences.Sync = {
 			{ name: library.name }
 		));
 		this.updateStorageProfilesUI();
+		await this._savePostgreSQLSyncSettingsIfEnabled();
 	},
 
 
@@ -1265,25 +1815,6 @@ Zotero_Preferences.Sync = {
 			});
 
 			container.appendChild(row);
-
-			let metadataRow = document.createXULElement('hbox');
-			metadataRow.setAttribute('class', 'storage-library-profile-row');
-			metadataRow.setAttribute('align', 'center');
-			metadataRow.appendChild(document.createXULElement('box'));
-			let metadataCheckbox = document.createXULElement('checkbox');
-			metadataCheckbox.setAttribute('native', 'true');
-			metadataCheckbox.setAttribute(
-				'label',
-				this._formatStorageMessage('preferences-sync-fileSyncing-library-metadata-sync')
-			);
-			metadataCheckbox.checked = Zotero.Sync.Storage.Profiles
-				.isWebDAVMetadataEnabledForLibrary(library.libraryID);
-			metadataCheckbox.disabled = isWebDAVProject || !menu.value;
-			metadataCheckbox.addEventListener('command', () => {
-				this.onLibraryMetadataSyncChange(library.libraryID, metadataCheckbox.checked);
-			});
-			metadataRow.appendChild(metadataCheckbox);
-			container.appendChild(metadataRow);
 		}
 	},
 
@@ -1306,43 +1837,7 @@ Zotero_Preferences.Sync = {
 		this.updateWebDAVProjectLibrariesUI();
 		await this.updateStorageSettingsUI({ unverify: false });
 		this.updateStorageSettingsGroupsUI();
-	},
-
-
-	onLibraryMetadataSyncChange: async function (libraryID, enabled) {
-		try {
-			if (enabled) {
-				let library = Zotero.Libraries.get(libraryID);
-				let confirmed = Services.prompt.confirm(
-					window,
-					Zotero.getString('general.warning'),
-					this._formatStorageMessage(
-						'preferences-sync-fileSyncing-library-metadata-migrate-confirm',
-						{ name: library.name }
-					)
-				);
-				if (!confirmed) {
-					this.updateLibraryStorageProfilesUI();
-					this.updateWebDAVProjectLibrariesUI();
-					return;
-				}
-				await Zotero.Sync.Storage.Profiles.migrateLibraryToWebDAV(libraryID);
-				this._setStorageProfileStatus(this._formatStorageMessage(
-					'preferences-sync-fileSyncing-library-metadata-migrated',
-					{ name: library.name }
-				));
-			}
-			else {
-				Zotero.Sync.Storage.Profiles.setWebDAVMetadataEnabledForLibrary(libraryID, false);
-			}
-		}
-		catch (e) {
-			Zotero.logError(e);
-			this._setStorageProfileStatus(e.message, true);
-			Zotero.alert(window, Zotero.getString('general.error'), e.message);
-		}
-		this.updateLibraryStorageProfilesUI();
-		this.updateWebDAVProjectLibrariesUI();
+		await this._savePostgreSQLSyncSettingsIfEnabled();
 	},
 
 
@@ -1463,6 +1958,7 @@ Zotero_Preferences.Sync = {
 
 		this.updateStorageSettingsUI();
 		this.storeLastStorageSettings();
+		await this._savePostgreSQLSyncSettingsIfEnabled();
 	},
 
 
@@ -1536,6 +2032,7 @@ Zotero_Preferences.Sync = {
 				Zotero.getString('sync.storage.serverConfigurationVerified'),
 				Zotero.getString('sync.storage.fileSyncSetUp')
 			);
+			await this._savePostgreSQLSyncSettingsIfEnabled();
 		}
 		else {
 			Zotero.logError("WebDAV verification failed");
@@ -1745,7 +2242,7 @@ Zotero_Preferences.Sync = {
 				const CHECKBOX_THRESHOLD = 10;
 				const CONFIRMATION_TEXT_MAX_ITEMS = 5;
 
-				let apiKey = await Zotero.Sync.Data.Local.getAPIKey();
+				let apiKey = await this._getActiveMetadataAPIKey();
 				let client = Zotero.Sync.Runner.getAPIClient({ apiKey });
 				var keyInfo = await Zotero.Sync.Runner.checkAccess(client, { timeout: 5000 });
 				let { keys: remoteKeysArray } = await client.getKeys('user', keyInfo.userID, { target: 'items', itemType: '-annotation' });
