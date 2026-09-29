@@ -709,9 +709,9 @@ if [ $BUILD_MAC == 1 ]; then
 	xz -d --stdout "$CALLDIR/mac/zotero.xz" > "$CONTENTSDIR/MacOS/zotero"
 	chmod 755 "$CONTENTSDIR/MacOS/zotero"
 
-	# TEMP: Custom version of XUL with some backported Mozilla bug fixes
+	# Overlay custom Firefox components (e.g., XUL or libmozglue.dylib)
 	if [ -n "$custom_components_hash_mac" ]; then
-		cp "$MAC_RUNTIME_PATH/../MacOS/XUL" "$CONTENTSDIR/MacOS/"
+		cp -R "$MAC_RUNTIME_PATH/../MacOS/." "$CONTENTSDIR/MacOS/"
 	fi
 
 	# Use our own updater, because Mozilla's requires updates signed by Mozilla
@@ -890,6 +890,13 @@ if [ $BUILD_MAC == 1 ]; then
 			echo
 			/usr/bin/codesign --verify -vvvv "$appex"
 		done
+	elif [ -n "$custom_components_hash_mac" ]; then
+		# Mozilla's helper apps (plugin-container, GPU helper, etc.) are signed with Mozilla's Team ID
+		# and the hardened runtime, so without our signature they can't load custom components such as
+		# libmozglue.dylib and fail to launch. Re-sign them ad hoc, which removes both. (Signed builds
+		# re-sign everything with our Developer ID above.)
+		find "$APPDIR/Contents/MacOS" -maxdepth 1 -name '*.app' -not -name "updater.app" -print0 \
+			| xargs -0 /usr/bin/codesign --force --sign -
 	fi
 	
 	# Build and notarize disk image
