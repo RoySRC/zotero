@@ -53,9 +53,53 @@ npm run user:password -- --username sajeeb
 The login identity comes from the imported `users` row, so use that row's
 `username` in Zotero's Account pane. On successful login the server returns a
 fresh per-user API token plus any saved sync settings from `/sync/settings`.
+
+New users can also be created from Zotero's PostgreSQL account pane. The first
+user on an empty PostgreSQL server can be created without a token. After that,
+`POST /auth/register` requires an existing PostgreSQL account token, so log in
+first before creating additional local users.
+
+Passwords can be reset from Zotero's PostgreSQL account pane by entering the
+username, current password, and new password. The server verifies the current
+password with `POST /auth/password`, updates the stored password hash, revokes
+existing tokens for that user, and returns a fresh token.
+
 The custom client then populates the WebDAV profile and library file-storage UI
 from those settings. WebDAV passwords are not included in the settings bundle;
 they remain local login-manager secrets.
+
+## WebDAV group access propagation
+
+When a group library member list is updated, the server copies the library's
+assigned WebDAV profile and library-file-storage assignment into each selected
+member's `user_sync_settings` row. If configured, it also updates a WebDAV group
+password map such as `auth/group.passwd`.
+
+For a locally accessible file:
+
+```sh
+export WEBDAV_GROUP_PASSWD_PATH='/home/src13/zotero-webdav/auth/group.passwd'
+```
+
+For a file on another host over SSH:
+
+```sh
+export WEBDAV_GROUP_PASSWD_SSH_HOST='src13@cs-arch-27.cmpt.sfu.ca'
+export WEBDAV_GROUP_PASSWD_PATH='/localhome/src13/zotero-webdav/auth/group.passwd'
+```
+
+By default, the server uses the WebDAV profile ID as the group name in
+`group.passwd` and the PostgreSQL username as the WebDAV username. Override
+those when they differ:
+
+```sh
+export WEBDAV_PROFILE_ACCESS_GROUPS='{"project1":"project-1"}'
+export WEBDAV_USERNAME_MAP='{"14718097":"sajeeb","Superjet7914":"sajeeb"}'
+```
+
+The profile/group map accepts either profile IDs or normalized WebDAV profile
+URLs as keys. The username map accepts either PostgreSQL usernames or Zotero user
+IDs as keys.
 
 ## Configure the custom Zotero app
 

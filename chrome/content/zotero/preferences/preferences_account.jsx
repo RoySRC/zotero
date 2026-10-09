@@ -49,10 +49,9 @@ Zotero_Preferences.Sync = {
 		this.updateStorageSettingsGroupsUI();
 		await this.initMetadataSyncUI();
 
-		var username = Zotero.Users.getCurrentUsername() || Zotero.Prefs.get('sync.server.username') || " ";
+		let postgreSQLMetadataEnabled = Zotero.Sync.Metadata.isPostgreSQLSyncEnabled();
 		var apiKey = await Zotero.Sync.Data.Local.getAPIKey();
-		let emails = apiKey ? Zotero.Users.getCurrentEmails() : undefined;
-		this.displayFields(apiKey ? username : "", { emails });
+		await this._refreshAccountAndSyncUI();
 
 		var pass = await Zotero.Sync.Runner.getStorageController('webdav').getPassword();
 		if (pass) {
@@ -61,7 +60,7 @@ Zotero_Preferences.Sync = {
 		this.initStorageProfilesUI();
 		this._registerStorageLibraryObserver();
 
-		if (apiKey) {
+		if (!postgreSQLMetadataEnabled && apiKey) {
 			try {
 				var keyInfo = await Zotero.Sync.Runner.checkAccess(
 					Zotero.Sync.Runner.getAPIClient({ apiKey, metadataBackend: false }),
@@ -821,7 +820,9 @@ Zotero_Preferences.Sync = {
 			Zotero.Libraries.userLibraryID
 		);
 		var userUsesZFS = libraryEnabled && storageProtocol == 'zotero' && !userProfileID;
-		var groupUsesZFS = groupsEnabled && this._hasDefaultStorageGroup();
+		var groupUsesZFS = !this._isPostgreSQLMetadataBackendSelected()
+			&& groupsEnabled
+			&& this._hasDefaultStorageGroup();
 
 		terms.hidden = !(userUsesZFS || groupUsesZFS);
 	},
@@ -843,6 +844,7 @@ Zotero_Preferences.Sync = {
 		document.getElementById('metadata-postgresql-username').value =
 			Zotero.Users.getCurrentUsername() || Zotero.Prefs.get('sync.server.username') || '';
 		document.getElementById('metadata-postgresql-password').value = '';
+		this.hidePostgreSQLPasswordReset();
 		this.updateMetadataSyncUI();
 
 		if (backend == Zotero.Sync.Metadata.BACKEND_POSTGRESQL
@@ -861,11 +863,28 @@ Zotero_Preferences.Sync = {
 		document.getElementById('metadata-postgresql-settings').hidden =
 			!usingPostgreSQL || !!this._metadataLoadInProgress;
 		document.getElementById('metadata-postgresql-login').disabled = !usingPostgreSQL;
+		document.getElementById('metadata-postgresql-register').disabled = !usingPostgreSQL;
+		document.getElementById('metadata-postgresql-show-password-reset').disabled = !usingPostgreSQL;
+		document.getElementById('metadata-postgresql-reset-password').disabled = !usingPostgreSQL;
+		document.getElementById('metadata-postgresql-cancel-password-reset').disabled = !usingPostgreSQL;
+		let groupStorageOption = document.getElementById('storage-groups-zotero-storage-option');
+		if (groupStorageOption) {
+			groupStorageOption.hidden = usingPostgreSQL;
+		}
+		let createLibraryButton = document.getElementById('storage-library-create');
+		if (createLibraryButton) {
+			createLibraryButton.disabled = !usingPostgreSQL;
+		}
+		if (document.getElementById('storage-library-profile-list')) {
+			this.updateLibraryStorageProfilesUI();
+		}
+		this.updateStorageSettingsGroupsUI();
 	},
 
 
 	onMetadataBackendChange: function () {
 		document.getElementById('metadata-loading-panel').hidden = true;
+		this.hidePostgreSQLPasswordReset();
 		this._metadataLoadInProgress = false;
 		this.updateMetadataSyncUI();
 		this._setMetadataSyncStatus('');
@@ -879,8 +898,55 @@ Zotero_Preferences.Sync = {
 	},
 
 
+	onMetadataPasswordResetKeyPress: async function (event) {
+		if (event.keyCode == 13) {
+			await this.resetPostgreSQLMetadataServerPassword();
+		}
+	},
+
+
+	showPostgreSQLPasswordReset: function () {
+		let panel = document.getElementById('metadata-postgresql-password-reset-settings');
+		panel.hidden = false;
+		document.getElementById('metadata-postgresql-reset-current-password').value = '';
+		document.getElementById('metadata-postgresql-reset-new-password').value = '';
+		document.getElementById('metadata-postgresql-reset-confirm-new-password').value = '';
+		document.getElementById('metadata-postgresql-reset-current-password').focus();
+		this._setMetadataSyncStatus('');
+	},
+
+
+	hidePostgreSQLPasswordReset: function () {
+		let panel = document.getElementById('metadata-postgresql-password-reset-settings');
+		if (panel) {
+			panel.hidden = true;
+		}
+		let currentPassword = document.getElementById('metadata-postgresql-reset-current-password');
+		if (currentPassword) {
+			currentPassword.value = '';
+		}
+		let newPassword = document.getElementById('metadata-postgresql-reset-new-password');
+		if (newPassword) {
+			newPassword.value = '';
+		}
+		let confirmNewPassword = document.getElementById('metadata-postgresql-reset-confirm-new-password');
+		if (confirmNewPassword) {
+			confirmNewPassword.value = '';
+		}
+	},
+
+
 	_formatMetadataMessage: function (id, args) {
 		return Zotero.ftl.formatValueSync(id, args);
+	},
+
+
+	_isPostgreSQLMetadataBackendSelected: function () {
+		let menu = document.getElementById('metadata-backend');
+		let backend = menu && menu.value
+			? menu.value
+			: Zotero.Sync.Metadata.getBackend();
+		return backend == Zotero.Sync.Metadata.BACKEND_POSTGRESQL;
 	},
 
 
@@ -1197,7 +1263,148 @@ Zotero_Preferences.Sync = {
 
 
 	loginPostgreSQLMetadataServer: async function () {
+		return this._loginOrCreatePostgreSQLMetadataServer({ createAccount: false });
+	},
+
+
+	createPostgreSQLMetadataServerAccount: async function () {
+		return this._loginOrCreatePostgreSQLMetadataServer({ createAccount: true });
+	},
+
+
+	resetPostgreSQLMetadataServerPassword: async function () {
 		let loginButton = document.getElementById('metadata-postgresql-login');
+		let registerButton = document.getElementById('metadata-postgresql-register');
+		let showResetButton = document.getElementById('metadata-postgresql-show-password-reset');
+		let resetButton = document.getElementById('metadata-postgresql-reset-password');
+		let cancelResetButton = document.getElementById('metadata-postgresql-cancel-password-reset');
+		let progressMeter = document.getElementById('metadata-progress');
+		let urlField = document.getElementById('metadata-postgresql-url');
+		let usernameField = document.getElementById('metadata-postgresql-username');
+		let currentPasswordField = document.getElementById('metadata-postgresql-reset-current-password');
+		let newPasswordField = document.getElementById('metadata-postgresql-reset-new-password');
+		let confirmNewPasswordField = document.getElementById('metadata-postgresql-reset-confirm-new-password');
+		let url;
+		try {
+			url = Zotero.Sync.Metadata.normalizePostgreSQLBaseURL(urlField.value);
+		}
+		catch (e) {
+			urlField.focus();
+			this._setMetadataSyncStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			return;
+		}
+
+		let username = usernameField.value.trim();
+		let oldPassword = currentPasswordField.value;
+		let newPassword = newPasswordField.value;
+		let confirmNewPassword = confirmNewPasswordField.value;
+		if (!username) {
+			usernameField.focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-enter-username'
+			), true);
+			return;
+		}
+		if (!oldPassword) {
+			currentPasswordField.focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-enter-current-password'
+			), true);
+			return;
+		}
+		if (!newPassword) {
+			newPasswordField.focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-enter-new-password'
+			), true);
+			return;
+		}
+		if (!confirmNewPassword) {
+			confirmNewPasswordField.focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-enter-confirm-new-password'
+			), true);
+			return;
+		}
+		if (newPassword != confirmNewPassword) {
+			confirmNewPasswordField.focus();
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-new-password-mismatch'
+			), true);
+			return;
+		}
+
+		this._startMetadataLoadingStatus();
+		this._appendMetadataLoadStatus('Starting PostgreSQL metadata password reset', {
+			serverURL: url,
+			username,
+			currentPasswordProvided: !!oldPassword,
+			newPasswordProvided: !!newPassword,
+			confirmNewPasswordProvided: !!confirmNewPassword
+		});
+		loginButton.disabled = true;
+		registerButton.disabled = true;
+		showResetButton.disabled = true;
+		resetButton.disabled = true;
+		cancelResetButton.disabled = true;
+		progressMeter.hidden = false;
+		try {
+			this._appendMetadataLoadStatus('Submitting password reset to PostgreSQL metadata server', {
+				endpoint: url + 'auth/password',
+				method: 'POST'
+			});
+			let result = await Zotero.Sync.Metadata.resetPostgreSQLPassword({
+				url,
+				username,
+				oldPassword,
+				newPassword
+			});
+			this._appendMetadataLoadStatus('Password reset succeeded', {
+				userID: result.userID,
+				username: result.username,
+				hasAPIKey: !!result.apiKey
+			});
+			Zotero.Prefs.set('sync.server.username', result.username);
+			urlField.value = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
+			usernameField.value = result.username;
+			this.hidePostgreSQLPasswordReset();
+			this.displayFields(result.username, { emails: result.emails });
+			this._setMetadataSyncStatus(this._formatMetadataMessage(
+				'preferences-sync-metadata-postgresql-password-reset-succeeded',
+				{ username: result.username }
+			));
+			this._finishMetadataLoadingStatus('PostgreSQL password reset completed', {
+				username: result.username
+			});
+		}
+		catch (e) {
+			Zotero.logError(e);
+			this._finishMetadataLoadingStatus('PostgreSQL password reset failed', {
+				name: e.name,
+				message: e.message,
+				stack: e.stack || ''
+			});
+			this._setMetadataSyncStatus(e.message, true);
+			Zotero.alert(window, Zotero.getString('general.error'), e.message);
+		}
+		finally {
+			loginButton.disabled = false;
+			registerButton.disabled = false;
+			showResetButton.disabled = false;
+			resetButton.disabled = false;
+			cancelResetButton.disabled = false;
+			progressMeter.hidden = true;
+		}
+	},
+
+
+	_loginOrCreatePostgreSQLMetadataServer: async function ({ createAccount = false } = {}) {
+		let loginButton = document.getElementById('metadata-postgresql-login');
+		let registerButton = document.getElementById('metadata-postgresql-register');
+		let showResetButton = document.getElementById('metadata-postgresql-show-password-reset');
+		let resetButton = document.getElementById('metadata-postgresql-reset-password');
+		let cancelResetButton = document.getElementById('metadata-postgresql-cancel-password-reset');
 		let progressMeter = document.getElementById('metadata-progress');
 		let urlField = document.getElementById('metadata-postgresql-url');
 		let usernameField = document.getElementById('metadata-postgresql-username');
@@ -1238,29 +1445,48 @@ Zotero_Preferences.Sync = {
 		}
 
 		this._startMetadataLoadingStatus();
-		this._appendMetadataLoadStatus('Starting PostgreSQL metadata login', {
-			serverURL: url,
-			username,
-			passwordProvided: !!password,
-			currentBackend: Zotero.Sync.Metadata.getBackend(),
-			currentLocalLibraries: this._getLocalLibraryLoadSummary()
-		});
+		this._appendMetadataLoadStatus(
+			createAccount
+				? 'Starting PostgreSQL metadata account creation'
+				: 'Starting PostgreSQL metadata login',
+			{
+				serverURL: url,
+				username,
+				passwordProvided: !!password,
+				currentBackend: Zotero.Sync.Metadata.getBackend(),
+				currentLocalLibraries: this._getLocalLibraryLoadSummary()
+			}
+		);
 		loginButton.disabled = true;
+		registerButton.disabled = true;
+		showResetButton.disabled = true;
+		resetButton.disabled = true;
+		cancelResetButton.disabled = true;
 		progressMeter.hidden = false;
 		try {
-			this._appendMetadataLoadStatus('Authenticating with PostgreSQL metadata server', {
-				endpoint: url + 'auth/login',
-				method: 'POST'
-			});
-			let result = await Zotero.Sync.Metadata.loginPostgreSQL({ url, username, password });
-			this._appendMetadataLoadStatus('Authentication succeeded', {
-				userID: result.userID,
-				username: result.username,
-				displayName: result.displayName,
-				emailCount: Array.isArray(result.emails) ? result.emails.length : 0,
-				hasAPIKey: !!result.apiKey,
-				syncSettings: this._summarizePostgreSQLSettings(result.syncSettings)
-			});
+			this._appendMetadataLoadStatus(
+				createAccount
+					? 'Creating PostgreSQL metadata account'
+					: 'Authenticating with PostgreSQL metadata server',
+				{
+					endpoint: url + (createAccount ? 'auth/register' : 'auth/login'),
+					method: 'POST'
+				}
+			);
+			let result = createAccount
+				? await Zotero.Sync.Metadata.registerPostgreSQL({ url, username, password })
+				: await Zotero.Sync.Metadata.loginPostgreSQL({ url, username, password });
+			this._appendMetadataLoadStatus(
+				createAccount ? 'Account creation succeeded' : 'Authentication succeeded',
+				{
+					userID: result.userID,
+					username: result.username,
+					displayName: result.displayName,
+					emailCount: Array.isArray(result.emails) ? result.emails.length : 0,
+					hasAPIKey: !!result.apiKey,
+					syncSettings: this._summarizePostgreSQLSettings(result.syncSettings)
+				}
+			);
 			this._appendMetadataLoadStatus('Checking local account identity compatibility', {
 				userID: result.userID,
 				username: result.username
@@ -1282,6 +1508,7 @@ Zotero_Preferences.Sync = {
 			urlField.value = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
 			usernameField.value = result.username;
 			passwordField.value = '';
+			this.hidePostgreSQLPasswordReset();
 			this._appendMetadataLoadStatus('Applying sync settings from PostgreSQL', {
 				settings: this._summarizePostgreSQLSettings(result.syncSettings)
 			});
@@ -1292,26 +1519,42 @@ Zotero_Preferences.Sync = {
 			this.displayFields(result.username, { emails: result.emails });
 			await this._syncAndRefreshAfterPostgreSQLLogin(loginContext, result);
 			this._setMetadataSyncStatus(this._formatMetadataMessage(
-				'preferences-sync-metadata-postgresql-login-succeeded',
+				createAccount
+					? 'preferences-sync-metadata-postgresql-register-succeeded'
+					: 'preferences-sync-metadata-postgresql-login-succeeded',
 				{ username: result.username }
 			));
-			this._finishMetadataLoadingStatus('PostgreSQL account settings loaded successfully', {
-				username: result.username,
-				finalLocalLibraries: this._getLocalLibraryLoadSummary()
-			});
+			this._finishMetadataLoadingStatus(
+				createAccount
+					? 'PostgreSQL account created and settings loaded successfully'
+					: 'PostgreSQL account settings loaded successfully',
+				{
+					username: result.username,
+					finalLocalLibraries: this._getLocalLibraryLoadSummary()
+				}
+			);
 		}
 		catch (e) {
 			Zotero.logError(e);
-			this._finishMetadataLoadingStatus('PostgreSQL account settings load failed', {
-				name: e.name,
-				message: e.message,
-				stack: e.stack || ''
-			});
+			this._finishMetadataLoadingStatus(
+				createAccount
+					? 'PostgreSQL account creation failed'
+					: 'PostgreSQL account settings load failed',
+				{
+					name: e.name,
+					message: e.message,
+					stack: e.stack || ''
+				}
+			);
 			this._setMetadataSyncStatus(e.message, true);
 			Zotero.alert(window, Zotero.getString('general.error'), e.message);
 		}
 		finally {
 			loginButton.disabled = false;
+			registerButton.disabled = false;
+			showResetButton.disabled = false;
+			resetButton.disabled = false;
+			cancelResetButton.disabled = false;
 			progressMeter.hidden = true;
 		}
 	},
@@ -1735,12 +1978,230 @@ Zotero_Preferences.Sync = {
 		));
 		this.updateStorageProfilesUI();
 		await this._savePostgreSQLSyncSettingsIfEnabled();
-	},
+		},
 
 
-	_getProfileAssignableLibraries: function () {
-		let userLibrary = Zotero.Libraries.get(Zotero.Libraries.userLibraryID);
-		let groups = Zotero.Libraries.getAll()
+		_setLibraryProfileStatus: function (message, isError = false) {
+			let label = document.getElementById('storage-library-profile-status');
+			if (!label) {
+				return;
+			}
+			label.value = message || '';
+			label.classList.toggle('error', isError);
+		},
+
+
+		_getPostgreSQLCurrentUserID: function () {
+			return Zotero.Users.getCurrentUserID()
+				|| parseInt(Zotero.Prefs.get('sync.server.userID') || 0, 10)
+				|| null;
+		},
+
+
+		_fetchPostgreSQLLibraryUsers: async function () {
+			let users = await Zotero.Sync.Metadata.listPostgreSQLUsers();
+			if (!users.length) {
+				throw new Error("No PostgreSQL metadata users are available");
+			}
+			return users;
+		},
+
+
+		_normalizePostgreSQLGroupMemberIDs: function (data = {}) {
+			let memberUserIDs = Array.isArray(data.members)
+				? data.members.map(member => {
+					return typeof member == 'object' && member
+						? Number(member.id)
+						: Number(member);
+				})
+				: [];
+			if (data.owner) {
+				memberUserIDs.push(Number(data.owner));
+			}
+			return [...new Set(memberUserIDs.filter(Boolean))];
+		},
+
+
+		_getPostgreSQLGroupOwnerID: function (data = {}) {
+			return Number(data.owner) || null;
+		},
+
+
+		_eraseLocalPostgreSQLGroup: async function (groupID) {
+			let group = Zotero.Groups.get(groupID);
+			if (group) {
+				await group.eraseTx();
+			}
+		},
+
+
+		_openPostgreSQLLibraryDialog: function (io) {
+			window.openDialog(
+				"chrome://zotero/content/preferences/postgresqlLibraryDialog.xhtml",
+				"",
+				"chrome,modal,centerscreen,resizable",
+				io
+			);
+			return io.out || null;
+		},
+
+
+		_syncAfterPostgreSQLLibraryManagement: async function () {
+			await Zotero.Sync.Runner.sync({ background: true });
+			await this._refreshStorageProfileSections();
+			this._setLibraryProfileStatus(this._formatStorageMessage(
+				'preferences-sync-fileSyncing-library-management-sync-finished'
+			));
+		},
+
+
+		openPostgreSQLLibrarySettingsDialog: async function (libraryID) {
+			try {
+				if (!this._isPostgreSQLMetadataBackendSelected()) {
+					throw new Error("Select PostgreSQL Server as the metadata backend first");
+				}
+				let library = Zotero.Libraries.get(libraryID);
+				if (!library || library.libraryType != 'group') {
+					throw new Error("Only group libraries have PostgreSQL settings");
+				}
+				let groupID = Zotero.Groups.getGroupIDFromLibraryID(libraryID);
+				if (!groupID) {
+					throw new Error("Group ID not found for selected library");
+				}
+				let [users, groupResponse] = await Promise.all([
+					this._fetchPostgreSQLLibraryUsers(),
+					Zotero.Sync.Metadata.getPostgreSQLGroupLibrary(groupID)
+				]);
+				let groupData = groupResponse.data || {};
+				let out = this._openPostgreSQLLibraryDialog({
+					mode: 'settings',
+					libraryName: library.name,
+					groupID,
+					users,
+					currentUserID: this._getPostgreSQLCurrentUserID(),
+					ownerUserID: this._getPostgreSQLGroupOwnerID(groupData),
+					memberUserIDs: this._normalizePostgreSQLGroupMemberIDs(groupData)
+				});
+				if (!out) {
+					return;
+				}
+
+				if (out.deleteLibrary) {
+					await Zotero.Sync.Metadata.safelyDeletePostgreSQLGroupLibrary({
+						groupID,
+						newOwnerUserID: out.newOwnerUserID,
+						memberUserIDs: out.memberUserIDs
+					});
+					await this._eraseLocalPostgreSQLGroup(groupID);
+					this._setLibraryProfileStatus(this._formatStorageMessage(
+						'preferences-sync-fileSyncing-library-delete-succeeded',
+						{ name: library.name }
+					));
+				}
+				else {
+					let memberResponse = await Zotero.Sync.Metadata.updatePostgreSQLGroupLibraryMembers({
+						groupID,
+						memberUserIDs: out.memberUserIDs
+					});
+					await Zotero.Sync.Metadata.savePostgreSQLGroupLibraryResponse(memberResponse);
+					this._setLibraryProfileStatus(this._formatStorageMessage(
+						'preferences-sync-fileSyncing-library-members-succeeded',
+						{ name: library.name }
+					));
+				}
+				await this._syncAfterPostgreSQLLibraryManagement();
+			}
+			catch (e) {
+				Zotero.logError(e);
+				this._setLibraryProfileStatus(e.message, true);
+				Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			}
+		},
+
+
+		openCreatePostgreSQLLibraryDialog: async function () {
+			try {
+				if (!this._isPostgreSQLMetadataBackendSelected()) {
+					throw new Error("Select PostgreSQL Server as the metadata backend first");
+				}
+				let users = await this._fetchPostgreSQLLibraryUsers();
+				let currentUserID = this._getPostgreSQLCurrentUserID();
+				let out = this._openPostgreSQLLibraryDialog({
+					mode: 'create',
+					users,
+					currentUserID
+				});
+				if (!out) {
+					return;
+				}
+				let response = await Zotero.Sync.Metadata.createPostgreSQLGroupLibrary(out);
+				await Zotero.Sync.Metadata.savePostgreSQLGroupLibraryResponse(response);
+				let name = response?.data?.name || out.name;
+				this._setLibraryProfileStatus(this._formatStorageMessage(
+					'preferences-sync-fileSyncing-library-create-succeeded',
+					{ name }
+				));
+				await this._syncAfterPostgreSQLLibraryManagement();
+			}
+			catch (e) {
+				Zotero.logError(e);
+				this._setLibraryProfileStatus(e.message, true);
+				Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			}
+		},
+
+
+		openSafeDeletePostgreSQLLibraryDialog: async function (libraryID) {
+			try {
+				if (!this._isPostgreSQLMetadataBackendSelected()) {
+					throw new Error("Select PostgreSQL Server as the metadata backend first");
+				}
+				let library = Zotero.Libraries.get(libraryID);
+				if (!library || library.libraryType != 'group') {
+					throw new Error("Only group libraries can be safely deleted");
+				}
+				let groupID = Zotero.Groups.getGroupIDFromLibraryID(libraryID);
+				if (!groupID) {
+					throw new Error("Group ID not found for selected library");
+				}
+				let users = await this._fetchPostgreSQLLibraryUsers();
+				let currentUserID = this._getPostgreSQLCurrentUserID();
+				let groupResponse = await Zotero.Sync.Metadata.getPostgreSQLGroupLibrary(groupID);
+				let groupData = groupResponse.data || {};
+				let out = this._openPostgreSQLLibraryDialog({
+					mode: 'safe-delete',
+					libraryName: library.name,
+					groupID,
+					users,
+					currentUserID,
+					ownerUserID: this._getPostgreSQLGroupOwnerID(groupData),
+					memberUserIDs: this._normalizePostgreSQLGroupMemberIDs(groupData)
+				});
+				if (!out) {
+					return;
+				}
+				await Zotero.Sync.Metadata.safelyDeletePostgreSQLGroupLibrary({
+					groupID,
+					newOwnerUserID: out.newOwnerUserID
+				});
+				await this._eraseLocalPostgreSQLGroup(groupID);
+				this._setLibraryProfileStatus(this._formatStorageMessage(
+					'preferences-sync-fileSyncing-library-delete-succeeded',
+					{ name: library.name }
+				));
+				await this._syncAfterPostgreSQLLibraryManagement();
+			}
+			catch (e) {
+				Zotero.logError(e);
+				this._setLibraryProfileStatus(e.message, true);
+				Zotero.alert(window, Zotero.getString('general.error'), e.message);
+			}
+		},
+
+
+		_getProfileAssignableLibraries: function () {
+			let userLibrary = Zotero.Libraries.get(Zotero.Libraries.userLibraryID);
+			let groups = Zotero.Libraries.getAll()
 			.filter(library => library.libraryType == 'group')
 			.sort((a, b) => Zotero.getLocaleCollation().compareString(1, a.name, b.name));
 		return [userLibrary, ...groups];
@@ -1767,35 +2228,55 @@ Zotero_Preferences.Sync = {
 
 	updateLibraryStorageProfilesUI: function () {
 		let container = document.getElementById('storage-library-profile-list');
+		let emptyLabel = document.getElementById('storage-library-profile-empty');
+		let searchField = document.getElementById('storage-library-profile-search');
+		let search = searchField ? searchField.value.trim().toLocaleLowerCase() : '';
+		let htmlNS = 'http://www.w3.org/1999/xhtml';
 		container.replaceChildren();
 
+		let visibleRows = 0;
 		for (let library of this._getProfileAssignableLibraries()) {
+			let libraryName = library.name || '';
+			if (search && !libraryName.toLocaleLowerCase().includes(search)) {
+				continue;
+			}
+
+			visibleRows++;
 			let isWebDAVProject = Zotero.Sync.Storage.Profiles
 				.isWebDAVProjectLibrary(library.libraryID);
-			let row = document.createXULElement('hbox');
+			let row = document.createElementNS(htmlNS, 'div');
 			row.setAttribute('class', 'storage-library-profile-row');
-			row.setAttribute('align', 'center');
+			row.setAttribute('role', 'row');
 
-			let labelBox = document.createXULElement('hbox');
-			labelBox.setAttribute('align', 'center');
-			let label = document.createXULElement('label');
-			label.value = library.name;
+			let libraryCell = document.createElementNS(htmlNS, 'div');
+			libraryCell.setAttribute('class', 'storage-library-profile-cell storage-library-profile-library-cell');
+			libraryCell.setAttribute('role', 'cell');
+			let labelBox = document.createElementNS(htmlNS, 'div');
+			labelBox.setAttribute('class', 'storage-library-profile-library-name');
+			let label = document.createElementNS(htmlNS, 'span');
+			label.textContent = libraryName;
 			labelBox.appendChild(label);
 			if (isWebDAVProject) {
-				let projectLabel = document.createXULElement('label');
-				projectLabel.value = this._formatStorageMessage(
+				let projectLabel = document.createElementNS(htmlNS, 'span');
+				projectLabel.textContent = this._formatStorageMessage(
 					'preferences-sync-fileSyncing-webDAVProject-label'
 				);
 				projectLabel.setAttribute('class', 'storage-profile-status');
 				labelBox.appendChild(projectLabel);
 			}
-			row.appendChild(labelBox);
+			libraryCell.appendChild(labelBox);
+			row.appendChild(libraryCell);
 
+			let backendCell = document.createElementNS(htmlNS, 'div');
+			backendCell.setAttribute('class', 'storage-library-profile-cell storage-library-profile-backend-cell');
+			backendCell.setAttribute('role', 'cell');
 			let menu = document.createXULElement('menulist');
 			menu.setAttribute('native', 'true');
+			menu.setAttribute('class', 'storage-library-profile-backend-menu');
 			let popup = document.createXULElement('menupopup');
 			menu.appendChild(popup);
-			row.appendChild(menu);
+			backendCell.appendChild(menu);
+			row.appendChild(backendCell);
 
 			this._populateProfileMenu(menu, {
 				includeDefault: true,
@@ -1810,11 +2291,42 @@ Zotero_Preferences.Sync = {
 				}
 			}
 			menu.value = Zotero.Sync.Storage.Profiles.getLibraryProfileID(library.libraryID) || '';
-			menu.addEventListener('command', () => {
-				this.onLibraryStorageProfileChange(library.libraryID, menu.value);
-			});
+				menu.addEventListener('command', () => {
+					this.onLibraryStorageProfileChange(library.libraryID, menu.value);
+				});
 
-			container.appendChild(row);
+				let actionsCell = document.createElementNS(htmlNS, 'div');
+				actionsCell.setAttribute('class', 'storage-library-profile-cell storage-library-profile-actions-cell');
+				actionsCell.setAttribute('role', 'cell');
+				let settingsButton = document.createElementNS(htmlNS, 'button');
+				settingsButton.setAttribute('class', 'storage-library-profile-settings-button');
+				settingsButton.setAttribute('type', 'button');
+				settingsButton.setAttribute(
+					'aria-label',
+					this._formatStorageMessage('preferences-sync-fileSyncing-library-settings')
+				);
+				settingsButton.title = this._formatStorageMessage(
+					'preferences-sync-fileSyncing-library-settings'
+				);
+				let canManageLibrary = this._isPostgreSQLMetadataBackendSelected()
+					&& library.libraryType == 'group';
+				settingsButton.disabled = !canManageLibrary;
+				if (!canManageLibrary && library.libraryType == 'user') {
+					settingsButton.title = this._formatStorageMessage(
+						'preferences-sync-fileSyncing-library-delete-disabled'
+					);
+				}
+				settingsButton.addEventListener('click', () => {
+					this.openPostgreSQLLibrarySettingsDialog(library.libraryID);
+				});
+				actionsCell.appendChild(settingsButton);
+				row.appendChild(actionsCell);
+
+				container.appendChild(row);
+			}
+
+		if (emptyLabel) {
+			emptyLabel.hidden = visibleRows != 0;
 		}
 	},
 

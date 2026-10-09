@@ -36,6 +36,20 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
 CREATE INDEX IF NOT EXISTS auth_tokens_user
     ON auth_tokens (user_id);
 
+CREATE SEQUENCE IF NOT EXISTS local_zotero_user_id_seq
+    START WITH 2000000000
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+CREATE SEQUENCE IF NOT EXISTS local_zotero_group_id_seq
+    START WITH 2000000000
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
 INSERT INTO users (zotero_user_id, username, display_name, emails, password_hash, updated_at)
 SELECT user_id, username, display_name, emails, password_hash, updated_at
 FROM account_identity

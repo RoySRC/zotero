@@ -1,5 +1,7 @@
 import express from 'express';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import pg from 'pg';
 
 const { Pool } = pg;
@@ -10,6 +12,10 @@ const USER_ID = parseInt(process.env.ZOTERO_SYNC_USER_ID || '1', 10);
 const USERNAME = process.env.ZOTERO_SYNC_USERNAME || 'postgresql';
 const DISPLAY_NAME = process.env.ZOTERO_SYNC_DISPLAY_NAME || USERNAME;
 const PORT = parseInt(process.env.PORT || '23129', 10);
+const WEBDAV_GROUP_PASSWD_PATH = process.env.WEBDAV_GROUP_PASSWD_PATH || '';
+const WEBDAV_GROUP_PASSWD_SSH_HOST = process.env.WEBDAV_GROUP_PASSWD_SSH_HOST || '';
+const WEBDAV_PROFILE_ACCESS_GROUPS = parseJSONEnv('WEBDAV_PROFILE_ACCESS_GROUPS');
+const WEBDAV_USERNAME_MAP = parseJSONEnv('WEBDAV_USERNAME_MAP');
 
 if (!DATABASE_URL) {
 	throw new Error('DATABASE_URL is required');
@@ -57,7 +63,10 @@ const canonicalItemFieldOrder = [
 ];
 
 app.use(asyncHandler(async (req, res, next) => {
-	if (req.path == '/health' || req.path == '/auth/login') {
+	if (req.path == '/health'
+			|| req.path == '/auth/login'
+			|| req.path == '/auth/register'
+			|| req.path == '/auth/password') {
 		return next();
 	}
 	let key = req.get('Zotero-API-Key');
@@ -92,6 +101,94 @@ app.post('/auth/login', asyncHandler(async (req, res) => {
 		displayName: identity.displayName,
 		emails: identity.emails,
 		syncSettings: await getSyncSettings(identity.id)
+	});
+}));
+
+app.post('/auth/register', asyncHandler(async (req, res) => {
+	let username = `${req.body?.username || ''}`.trim();
+	let password = `${req.body?.password || ''}`;
+	let displayName = `${req.body?.displayName || username}`.trim() || username;
+	let emails = Array.isArray(req.body?.emails)
+		? req.body.emails.map(email => `${email}`.trim()).filter(Boolean)
+		: [];
+
+	if (!username) {
+		res.status(400).json({ error: 'invalid_username', message: 'Username not provided' });
+		return;
+	}
+	if (!/^[A-Za-z0-9._-]+$/.test(username)) {
+		res.status(400).json({
+			error: 'invalid_username',
+			message: "Username can contain only letters, numbers, '.', '_', and '-'"
+		});
+		return;
+	}
+	if (!password) {
+		res.status(400).json({ error: 'invalid_password', message: 'Password not provided' });
+		return;
+	}
+
+	let userCount = await getUserCount();
+	if (userCount) {
+		let key = req.get('Zotero-API-Key');
+		let authenticatedUser = key ? await getAuthenticatedUserForToken(key) : null;
+		if (!authenticatedUser) {
+			res.status(403).json({
+				error: 'forbidden',
+				message: 'Log in to an existing PostgreSQL metadata account before creating additional users'
+			});
+			return;
+		}
+	}
+
+	let identity = await createUserAccount({ username, password, displayName, emails });
+	let apiKey = await issueAuthToken(identity.id);
+	res.status(201).json({
+		apiKey,
+		userID: identity.userID,
+		username: identity.username,
+		displayName: identity.displayName,
+		emails: identity.emails,
+		syncSettings: await getSyncSettings(identity.id)
+	});
+}));
+
+app.post('/auth/password', asyncHandler(async (req, res) => {
+	let username = `${req.body?.username || ''}`.trim();
+	let oldPassword = `${req.body?.oldPassword || ''}`;
+	let newPassword = `${req.body?.newPassword || ''}`;
+
+	if (!username) {
+		res.status(400).json({ error: 'invalid_username', message: 'Username not provided' });
+		return;
+	}
+	if (!oldPassword) {
+		res.status(400).json({ error: 'invalid_password', message: 'Current password not provided' });
+		return;
+	}
+	if (!newPassword) {
+		res.status(400).json({ error: 'invalid_password', message: 'New password not provided' });
+		return;
+	}
+
+	let identity = await getUserByUsername(username);
+	if (!identity || !(await verifyPassword(oldPassword, identity))) {
+		res.status(403).json({
+			error: 'forbidden',
+			message: 'PostgreSQL metadata server rejected the username or current password'
+		});
+		return;
+	}
+
+	let updatedIdentity = await changeUserPassword(identity, newPassword);
+	let apiKey = await issueAuthToken(updatedIdentity.id);
+	res.json({
+		apiKey,
+		userID: updatedIdentity.userID,
+		username: updatedIdentity.username,
+		displayName: updatedIdentity.displayName,
+		emails: updatedIdentity.emails,
+		syncSettings: await getSyncSettings(updatedIdentity.id)
 	});
 }));
 
@@ -138,16 +235,92 @@ app.put('/sync/settings', asyncHandler(async (req, res) => {
 	res.status(204).end();
 }));
 
+app.get('/users', asyncHandler(async (_req, res) => {
+	let rows = await query(
+		"SELECT id, zotero_user_id, username, display_name, emails "
+			+ "FROM users ORDER BY lower(username), zotero_user_id"
+	);
+	res.json(rows.map(userPublicResponseFromRow));
+}));
+
+app.post('/libraries/groups', asyncHandler(async (req, res) => {
+	let name = `${req.body?.name || ''}`.trim();
+	let ownerUserID = parseInteger(req.body?.ownerUserID);
+	let memberUserIDs = Array.isArray(req.body?.memberUserIDs)
+		? req.body.memberUserIDs.map(parseInteger).filter(Boolean)
+		: [];
+	if (!name) {
+		res.status(400).json({ error: 'invalid_name', message: 'Library name not provided' });
+		return;
+	}
+	if (!ownerUserID) {
+		res.status(400).json({ error: 'invalid_owner', message: 'Library owner not provided' });
+		return;
+	}
+	let row = await createGroupLibrary({ name, ownerUserID, memberUserIDs });
+	res.status(201).json(groupResponseFromRow(row, req.authUser));
+}));
+
+app.put('/libraries/groups/:groupID/members', asyncHandler(async (req, res) => {
+	let groupID = parseInteger(req.params.groupID);
+	let memberUserIDs = Array.isArray(req.body?.memberUserIDs)
+		? req.body.memberUserIDs.map(parseInteger).filter(Boolean)
+		: [];
+	if (!groupID) {
+		res.status(400).json({ error: 'invalid_group', message: 'Library ID not provided' });
+		return;
+	}
+	if (!memberUserIDs.length) {
+		res.status(400).json({
+			error: 'invalid_members',
+			message: 'At least one library member is required'
+		});
+		return;
+	}
+	let row = await updateGroupLibraryMembers({
+		groupID,
+		user: req.authUser,
+		memberUserIDs
+	});
+	res.json(groupResponseFromRow(row, req.authUser));
+}));
+
+app.post('/libraries/groups/:groupID/safe-delete', asyncHandler(async (req, res) => {
+	let groupID = parseInteger(req.params.groupID);
+	let newOwnerUserID = parseInteger(req.body?.newOwnerUserID);
+	let memberUserIDs = Array.isArray(req.body?.memberUserIDs)
+		? req.body.memberUserIDs.map(parseInteger).filter(Boolean)
+		: [];
+	if (!groupID) {
+		res.status(400).json({ error: 'invalid_group', message: 'Library ID not provided' });
+		return;
+	}
+	if (!newOwnerUserID) {
+		res.status(400).json({
+			error: 'invalid_owner',
+			message: 'A replacement owner is required before deleting a library'
+		});
+		return;
+	}
+	let row = await safelyDeleteGroupLibraryForUser({
+		groupID,
+		user: req.authUser,
+		newOwnerUserID,
+		memberUserIDs
+	});
+	res.json(groupResponseFromRow(row, req.authUser));
+}));
+
 app.get('/users/:userID/groups', asyncHandler(async (req, res) => {
 	let identity = req.authUser;
 	if (Number(req.params.userID) != identity.userID) {
 		res.status(403).json({ error: 'forbidden' });
 		return;
 	}
-	let rows = await query(
+	let rows = (await query(
 		"SELECT type_id, name, group_version, metadata FROM libraries "
 			+ "WHERE type='group' ORDER BY name, type_id"
-	);
+	)).filter(row => userCanAccessGroup(row, identity));
 	if (req.query.format == 'versions') {
 		res.json(Object.fromEntries(rows.map(row => [row.type_id, Number(row.group_version)])));
 		return;
@@ -162,6 +335,10 @@ app.get('/groups/:groupID', asyncHandler(async (req, res) => {
 		user: identity
 	});
 	if (!row) {
+		res.status(404).type('text/plain').send('Not found');
+		return;
+	}
+	if (!userCanAccessGroup(row, identity)) {
 		res.status(404).type('text/plain').send('Not found');
 		return;
 	}
@@ -635,6 +812,581 @@ async function getUserByUsername(username, client = pool) {
 	return result.rows[0] ? userFromRow(result.rows[0]) : null;
 }
 
+async function getUserByZoteroUserID(userID, client = pool) {
+	let result = await client.query(
+		"SELECT id, zotero_user_id, username, display_name, emails, password_hash "
+			+ "FROM users WHERE zotero_user_id=$1",
+		[userID]
+	);
+	return result.rows[0] ? userFromRow(result.rows[0]) : null;
+}
+
+
+async function getUsersByZoteroUserIDs(userIDs, client = pool) {
+	if (!userIDs.length) {
+		return [];
+	}
+	let result = await client.query(
+		"SELECT id, zotero_user_id, username, display_name, emails, password_hash "
+			+ "FROM users WHERE zotero_user_id = ANY($1::bigint[])",
+		[userIDs]
+	);
+	return result.rows.map(userFromRow);
+}
+
+
+async function getUserCount() {
+	let result = await pool.query("SELECT COUNT(*) AS count FROM users");
+	return Number(result.rows[0].count);
+}
+
+async function createUserAccount({ username, password, displayName, emails }) {
+	let client = await pool.connect();
+	try {
+		await client.query('BEGIN');
+		let existing = await getUserByUsername(username, client);
+		if (existing) {
+			await client.query('ROLLBACK');
+			let error = new Error(`PostgreSQL metadata user '${username}' already exists`);
+			error.status = 409;
+			error.code = 'user_exists';
+			throw error;
+		}
+
+		let idResult = await client.query("SELECT nextval('local_zotero_user_id_seq') AS user_id");
+		let userID = Number(idResult.rows[0].user_id);
+		let userResult = await client.query(
+			"INSERT INTO users "
+				+ "(zotero_user_id, username, display_name, emails, password_hash, updated_at) "
+				+ "VALUES ($1, $2, $3, $4, $5, now()) "
+				+ "RETURNING id, zotero_user_id, username, display_name, emails, password_hash",
+			[
+				userID,
+				username,
+				displayName,
+				JSON.stringify(emails || []),
+				hashPassword(password)
+			]
+		);
+		let user = userFromRow(userResult.rows[0]);
+		await client.query(
+			"INSERT INTO libraries (type, type_id, name, metadata) VALUES ('user', $1, $2, '{}'::jsonb) "
+				+ "ON CONFLICT (type, type_id) DO NOTHING",
+			[user.userID, user.username]
+		);
+		await client.query(
+			"INSERT INTO user_sync_settings (user_id, data, updated_at) VALUES ($1, $2, now()) "
+				+ "ON CONFLICT (user_id) DO NOTHING",
+			[user.id, defaultSyncSettings()]
+		);
+		await client.query('COMMIT');
+		return user;
+	}
+	catch (e) {
+		try {
+			await client.query('ROLLBACK');
+		}
+		catch (_) {}
+		throw e;
+	}
+	finally {
+		client.release();
+	}
+}
+
+
+async function createGroupLibrary({ name, ownerUserID, memberUserIDs }) {
+	let client = await pool.connect();
+	try {
+		await client.query('BEGIN');
+		let owner = await getUserByZoteroUserID(ownerUserID, client);
+		if (!owner) {
+			let error = new Error(`PostgreSQL metadata user ${ownerUserID} was not found`);
+			error.status = 400;
+			error.code = 'invalid_owner';
+			throw error;
+		}
+
+		let allUserIDs = [...new Set([owner.userID, ...memberUserIDs])];
+		let usersResult = await client.query(
+			"SELECT id, zotero_user_id, username, display_name, emails, password_hash "
+				+ "FROM users WHERE zotero_user_id = ANY($1::bigint[])",
+			[allUserIDs]
+		);
+		let users = usersResult.rows.map(userFromRow);
+		let foundUserIDs = new Set(users.map(user => user.userID));
+		let missingUserIDs = allUserIDs.filter(userID => !foundUserIDs.has(userID));
+		if (missingUserIDs.length) {
+			let error = new Error(`Unknown library member user ID: ${missingUserIDs.join(', ')}`);
+			error.status = 400;
+			error.code = 'invalid_member';
+			throw error;
+		}
+
+		let groupID = Number((await client.query(
+			"SELECT nextval('local_zotero_group_id_seq') AS group_id"
+		)).rows[0].group_id);
+		let metadata = Object.assign(defaultGroupMetadata(groupID, name, owner), {
+			owner: owner.userID,
+			admins: [],
+			members: users.map(user => user.userID).sort((a, b) => a - b)
+		});
+		let result = await client.query(
+			"INSERT INTO libraries (type, type_id, name, version, group_version, metadata, updated_at) "
+				+ "VALUES ('group', $1, $2, 0, 1, $3, now()) RETURNING *",
+			[groupID, name, metadata]
+		);
+		await client.query('COMMIT');
+		return result.rows[0];
+	}
+	catch (e) {
+		try {
+			await client.query('ROLLBACK');
+		}
+		catch (_) {}
+		throw e;
+	}
+	finally {
+		client.release();
+	}
+}
+
+
+function libraryProfileKeyForGroupID(groupID) {
+	return `G${Number(groupID)}`;
+}
+
+function cleanSettingsData(data) {
+	return data && typeof data == 'object' && !Array.isArray(data)
+		? structuredClone(data)
+		: defaultSyncSettings();
+}
+
+function ensureFileStorageSettings(data) {
+	data.version ||= 1;
+	data.metadata ||= { backend: 'postgresql' };
+	data.fileStorage ||= {};
+	data.fileStorage.webdavProfiles ||= {};
+	data.fileStorage.libraryProfiles ||= {};
+	data.fileStorage.webdavProjectLibraries ||= {};
+	return data.fileStorage;
+}
+
+async function getUserSyncSettingsRowsByInternalID(userIDs, client) {
+	if (!userIDs.length) {
+		return new Map();
+	}
+	let result = await client.query(
+		"SELECT user_id, data FROM user_sync_settings WHERE user_id = ANY($1::bigint[])",
+		[userIDs]
+	);
+	return new Map(result.rows.map(row => [Number(row.user_id), cleanSettingsData(row.data)]));
+}
+
+async function findGroupFileStorageAssignment({ client, groupID, preferredUsers }) {
+	let libraryKey = libraryProfileKeyForGroupID(groupID);
+	let orderedUserIDs = [...new Set(
+		preferredUsers
+			.map(user => user?.id)
+			.map(Number)
+			.filter(Boolean)
+	)];
+	let settingsByUserID = await getUserSyncSettingsRowsByInternalID(orderedUserIDs, client);
+	for (let userID of orderedUserIDs) {
+		let data = settingsByUserID.get(userID);
+		let fileStorage = data?.fileStorage;
+		if (!fileStorage || typeof fileStorage != 'object') {
+			continue;
+		}
+		let profileID = fileStorage.libraryProfiles?.[libraryKey];
+		let profile = profileID ? fileStorage.webdavProfiles?.[profileID] : null;
+		if (!profileID || !profile) {
+			continue;
+		}
+		return {
+			libraryKey,
+			profileID,
+			profile: structuredClone(profile),
+			project: fileStorage.webdavProjectLibraries?.[libraryKey]
+				? structuredClone(fileStorage.webdavProjectLibraries[libraryKey])
+				: null
+		};
+	}
+	return null;
+}
+
+async function saveUserSyncSettings(client, userID, data) {
+	await client.query(
+		"INSERT INTO user_sync_settings (user_id, data, updated_at) VALUES ($1, $2, now()) "
+			+ "ON CONFLICT (user_id) DO UPDATE SET data=EXCLUDED.data, updated_at=now()",
+		[userID, data]
+	);
+}
+
+async function propagateGroupFileStorageSettings({ client, groupID, sourceUser, targetUsers }) {
+	let assignment = await findGroupFileStorageAssignment({
+		client,
+		groupID,
+		preferredUsers: [sourceUser, ...targetUsers]
+	});
+	if (!assignment) {
+		return null;
+	}
+
+	let settingsByUserID = await getUserSyncSettingsRowsByInternalID(
+		targetUsers.map(user => user.id),
+		client
+	);
+	for (let targetUser of targetUsers) {
+		let data = settingsByUserID.get(targetUser.id) || defaultSyncSettings();
+		let fileStorage = ensureFileStorageSettings(data);
+		fileStorage.webdavProfiles[assignment.profileID] = structuredClone(assignment.profile);
+		fileStorage.libraryProfiles[assignment.libraryKey] = assignment.profileID;
+		if (assignment.project) {
+			fileStorage.webdavProjectLibraries[assignment.libraryKey] = structuredClone(assignment.project);
+		}
+		await saveUserSyncSettings(client, targetUser.id, data);
+	}
+	return assignment;
+}
+
+async function revokeGroupFileStorageSettings({ client, groupID, targetUsers }) {
+	let libraryKey = libraryProfileKeyForGroupID(groupID);
+	let settingsByUserID = await getUserSyncSettingsRowsByInternalID(
+		targetUsers.map(user => user.id),
+		client
+	);
+	for (let targetUser of targetUsers) {
+		let data = settingsByUserID.get(targetUser.id);
+		if (!data?.fileStorage) {
+			continue;
+		}
+		if (data.fileStorage.libraryProfiles) {
+			delete data.fileStorage.libraryProfiles[libraryKey];
+		}
+		if (data.fileStorage.webdavProjectLibraries) {
+			delete data.fileStorage.webdavProjectLibraries[libraryKey];
+		}
+		await saveUserSyncSettings(client, targetUser.id, data);
+	}
+}
+
+
+function webDAVUsernameForUser(user) {
+	return WEBDAV_USERNAME_MAP[`${user.userID}`]
+		|| WEBDAV_USERNAME_MAP[user.username]
+		|| user.username;
+}
+
+
+function webDAVAccessGroupForAssignment(assignment) {
+	if (!assignment) {
+		return null;
+	}
+	return assignment.profile.accessGroup
+		|| WEBDAV_PROFILE_ACCESS_GROUPS[assignment.profileID]
+		|| WEBDAV_PROFILE_ACCESS_GROUPS[assignment.profile.url]
+		|| assignment.profileID;
+}
+
+
+function uniqueUsernames(users) {
+	return [...new Set(
+		users
+			.map(webDAVUsernameForUser)
+			.map(username => `${username || ''}`.trim())
+			.filter(Boolean)
+	)].sort((a, b) => a.localeCompare(b));
+}
+
+
+async function updateWebDAVAccessForMembershipChange({
+	storageAssignment,
+	addedUsers,
+	removedUsers
+}) {
+	if (!WEBDAV_GROUP_PASSWD_PATH || !storageAssignment) {
+		return;
+	}
+	let accessGroup = webDAVAccessGroupForAssignment(storageAssignment);
+	if (!accessGroup) {
+		return;
+	}
+	await updateWebDAVGroupPasswordFile({
+		accessGroup,
+		addUsernames: uniqueUsernames(addedUsers),
+		removeUsernames: uniqueUsernames(removedUsers)
+	});
+}
+
+
+async function updateWebDAVGroupPasswordFile({ accessGroup, addUsernames, removeUsernames }) {
+	let content = await readConfiguredTextFile(WEBDAV_GROUP_PASSWD_PATH);
+	let lines = content.split(/\r?\n/);
+	let found = false;
+	let changed = false;
+	let addSet = new Set(addUsernames);
+	let removeSet = new Set(removeUsernames);
+	let nextLines = lines.map(line => {
+		let match = line.match(/^(\s*([^:#]+?)\s*:\s*)(.*?)(\s*)$/);
+		if (!match || match[2].trim() != accessGroup) {
+			return line;
+		}
+		found = true;
+		let currentUsers = match[3].trim()
+			? match[3].trim().split(/\s+/)
+			: [];
+		let nextUsers = [...new Set(
+			currentUsers
+				.filter(username => !removeSet.has(username))
+				.concat([...addSet])
+		)].sort((a, b) => a.localeCompare(b));
+		let nextLine = `${match[1]}${nextUsers.join(' ')}${match[4]}`;
+		if (nextLine != line) {
+			changed = true;
+		}
+		return nextLine;
+	});
+
+	if (!found && addSet.size) {
+		if (nextLines.length && nextLines[nextLines.length - 1] !== '') {
+			nextLines.push('');
+		}
+		nextLines.push(`${accessGroup}: ${[...addSet].sort((a, b) => a.localeCompare(b)).join(' ')}`);
+		changed = true;
+	}
+
+	if (!changed) {
+		return;
+	}
+	await writeConfiguredTextFile(WEBDAV_GROUP_PASSWD_PATH, nextLines.join('\n'));
+}
+
+
+async function updateGroupLibraryMembers({ groupID, user, memberUserIDs }) {
+	let client = await pool.connect();
+	try {
+		await client.query('BEGIN');
+		let result = await client.query(
+			"SELECT * FROM libraries WHERE type='group' AND type_id=$1 FOR UPDATE",
+			[groupID]
+		);
+		let row = result.rows[0];
+		if (!row || !userCanAccessGroup(row, user)) {
+			let error = new Error("Library not found");
+			error.status = 404;
+			error.code = 'not_found';
+			throw error;
+		}
+
+		let data = groupDataFromRow(row, user);
+		if (!userCanAdministerGroup(data, user)) {
+			let error = new Error("Only the library owner or an administrator can update members");
+			error.status = 403;
+			error.code = 'forbidden';
+			throw error;
+		}
+
+		let ownerUserID = Number(data.owner);
+		let previousMemberIDs = new Set(
+			[ownerUserID, ...normalizeGroupMembers(data.members).map(member => member.id)]
+				.map(Number)
+				.filter(Boolean)
+		);
+		let nextMemberIDs = [...new Set([ownerUserID, ...memberUserIDs].map(Number).filter(Boolean))];
+		let users = await getUsersByZoteroUserIDs(nextMemberIDs, client);
+		let foundUserIDs = new Set(users.map(row => row.userID));
+		let missingUserIDs = nextMemberIDs.filter(userID => !foundUserIDs.has(userID));
+		let newMissingUserIDs = missingUserIDs.filter(userID => !previousMemberIDs.has(userID));
+		if (newMissingUserIDs.length) {
+			let error = new Error(`Unknown library member user ID: ${newMissingUserIDs.join(', ')}`);
+			error.status = 400;
+			error.code = 'invalid_member';
+			throw error;
+		}
+
+		data.members = nextMemberIDs.sort((a, b) => a - b);
+		data.admins = normalizeGroupMembers(data.admins)
+			.map(member => member.id)
+			.filter(memberID => data.members.includes(Number(memberID)));
+		let removedMemberIDs = [...previousMemberIDs]
+			.filter(memberID => !nextMemberIDs.includes(memberID));
+
+		let storageAssignment = await propagateGroupFileStorageSettings({
+			client,
+			groupID,
+			sourceUser: user,
+			targetUsers: users
+		});
+		let removedUsers = removedMemberIDs.length
+			? await getUsersByZoteroUserIDs(removedMemberIDs, client)
+			: [];
+		if (removedUsers.length) {
+			await revokeGroupFileStorageSettings({
+				client,
+				groupID,
+				targetUsers: removedUsers
+			});
+		}
+		await updateWebDAVAccessForMembershipChange({
+			storageAssignment,
+			addedUsers: users,
+			removedUsers
+		});
+
+		let updated = await client.query(
+			"UPDATE libraries "
+				+ "SET metadata=$1, group_version=group_version+1, updated_at=now() "
+				+ "WHERE id=$2 RETURNING *",
+			[data, row.id]
+		);
+		await client.query('COMMIT');
+		return updated.rows[0];
+	}
+	catch (e) {
+		try {
+			await client.query('ROLLBACK');
+		}
+		catch (_) {}
+		throw e;
+	}
+	finally {
+		client.release();
+	}
+}
+
+
+async function safelyDeleteGroupLibraryForUser({ groupID, user, newOwnerUserID, memberUserIDs = [] }) {
+	if (newOwnerUserID == user.userID) {
+		let error = new Error("Choose a replacement owner other than the deleting user");
+		error.status = 400;
+		error.code = 'invalid_owner';
+		throw error;
+	}
+
+	let client = await pool.connect();
+	try {
+		await client.query('BEGIN');
+		let newOwner = await getUserByZoteroUserID(newOwnerUserID, client);
+		if (!newOwner) {
+			let error = new Error(`PostgreSQL metadata user ${newOwnerUserID} was not found`);
+			error.status = 400;
+			error.code = 'invalid_owner';
+			throw error;
+		}
+
+		let result = await client.query(
+			"SELECT * FROM libraries WHERE type='group' AND type_id=$1 FOR UPDATE",
+			[groupID]
+		);
+		let row = result.rows[0];
+		if (!row || !userCanAccessGroup(row, user)) {
+			let error = new Error("Library not found");
+			error.status = 404;
+			error.code = 'not_found';
+			throw error;
+		}
+
+		let data = groupDataFromRow(row, user);
+		let members = normalizeGroupMembers(data.members)
+			.map(member => member.id);
+		members.push(Number(data.owner));
+		let previousMemberIDs = [...new Set(members.map(Number).filter(Boolean))];
+		if (!userCanAdministerGroup(data, user)) {
+			let error = new Error("Only the library owner or an administrator can safely delete this library");
+			error.status = 403;
+			error.code = 'forbidden';
+			throw error;
+		}
+		if (memberUserIDs.length) {
+			let requestedMemberIDs = [...new Set(memberUserIDs.map(Number).filter(Boolean))];
+			let requestedUsers = await getUsersByZoteroUserIDs(requestedMemberIDs, client);
+			let foundUserIDs = new Set(requestedUsers.map(row => row.userID));
+			let missingUserIDs = requestedMemberIDs.filter(userID => !foundUserIDs.has(userID));
+			let newMissingUserIDs = missingUserIDs.filter(userID => !previousMemberIDs.includes(userID));
+			if (newMissingUserIDs.length) {
+				let error = new Error(`Unknown library member user ID: ${newMissingUserIDs.join(', ')}`);
+				error.status = 400;
+				error.code = 'invalid_member';
+				throw error;
+			}
+			members = requestedMemberIDs;
+		}
+		if (!members.some(memberID => Number(memberID) == newOwner.userID)) {
+			let error = new Error("Replacement owner must already be a member of the library");
+			error.status = 400;
+			error.code = 'invalid_owner';
+			throw error;
+		}
+		members = members.filter(memberID => Number(memberID) != user.userID);
+		data.owner = newOwner.userID;
+		data.admins = normalizeGroupMembers(data.admins)
+			.map(member => member.id)
+			.filter(memberID => Number(memberID) != user.userID);
+		data.members = [...new Set(members)].sort((a, b) => a - b);
+		let targetUsers = await getUsersByZoteroUserIDs(data.members, client);
+		let removedMemberIDs = previousMemberIDs.filter(memberID => !data.members.includes(memberID));
+		let removedUsers = removedMemberIDs.length
+			? await getUsersByZoteroUserIDs(removedMemberIDs, client)
+			: [];
+		let storageAssignment = await propagateGroupFileStorageSettings({
+			client,
+			groupID,
+			sourceUser: user,
+			targetUsers
+		});
+		if (removedUsers.length) {
+			await revokeGroupFileStorageSettings({
+				client,
+				groupID,
+				targetUsers: removedUsers
+			});
+		}
+		await updateWebDAVAccessForMembershipChange({
+			storageAssignment,
+			addedUsers: targetUsers,
+			removedUsers
+		});
+
+		let updated = await client.query(
+			"UPDATE libraries "
+				+ "SET metadata=$1, group_version=group_version+1, updated_at=now() "
+				+ "WHERE id=$2 RETURNING *",
+			[data, row.id]
+		);
+		await client.query('COMMIT');
+		return updated.rows[0];
+	}
+	catch (e) {
+		try {
+			await client.query('ROLLBACK');
+		}
+		catch (_) {}
+		throw e;
+	}
+	finally {
+		client.release();
+	}
+}
+
+
+async function changeUserPassword(identity, newPassword) {
+	let passwordHash = hashPassword(newPassword);
+	await pool.query(
+		"UPDATE users SET password_hash=$1, updated_at=now() WHERE id=$2",
+		[passwordHash, identity.id]
+	);
+	await pool.query(
+		"UPDATE account_identity SET password_hash=$1, updated_at=now() WHERE user_id=$2",
+		[passwordHash, identity.userID]
+	);
+	await pool.query(
+		"DELETE FROM auth_tokens WHERE user_id=$1",
+		[identity.id]
+	);
+	return getUserByUsername(identity.username);
+}
+
 async function issueAuthToken(userID) {
 	let token = `zps_${crypto.randomBytes(32).toString('base64url')}`;
 	await pool.query(
@@ -658,6 +1410,17 @@ function userFromRow(row) {
 		passwordHash: row.password_hash || null
 	};
 }
+
+
+function userPublicResponseFromRow(row) {
+	return {
+		id: Number(row.zotero_user_id),
+		username: row.username,
+		displayName: row.display_name || row.username,
+		emails: Array.isArray(row.emails) ? row.emails : []
+	};
+}
+
 
 async function getAccountIdentity(client = pool) {
 	try {
@@ -1025,9 +1788,77 @@ function groupResponseFromRow(row, identity) {
 	return {
 		id: Number(row.type_id),
 		version: Number(row.group_version),
-		data: Object.assign(defaultGroupMetadata(row.type_id, row.name, identity), row.metadata || {})
+		data: groupDataFromRow(row, identity)
 	};
 }
+
+
+function groupDataFromRow(row, identity = null) {
+	let metadata = row.metadata && typeof row.metadata == 'object' && !Array.isArray(row.metadata)
+		? row.metadata
+		: {};
+	let hasMembershipData = metadata.owner || Array.isArray(metadata.members);
+	let fallback = hasMembershipData
+		? {
+			id: Number(row.type_id),
+			name: row.name,
+			description: '',
+			type: 'Private',
+			editable: true,
+			filesEditable: true,
+			members: []
+		}
+		: defaultGroupMetadata(row.type_id, row.name, identity);
+	return Object.assign(fallback, metadata);
+}
+
+
+function userCanAccessGroup(row, identity) {
+	if (!identity) {
+		return false;
+	}
+	let metadata = row.metadata && typeof row.metadata == 'object' && !Array.isArray(row.metadata)
+		? row.metadata
+		: {};
+	if (!metadata.owner && !Array.isArray(metadata.members)) {
+		return true;
+	}
+	let data = groupDataFromRow(row, identity);
+	if (Number(data.owner) == identity.userID) {
+		return true;
+	}
+	return normalizeGroupMembers(data.members)
+		.some(member => Number(member.id) == identity.userID);
+}
+
+
+function userCanAdministerGroup(data, identity) {
+	if (!identity || !data) {
+		return false;
+	}
+	if (Number(data.owner) == identity.userID) {
+		return true;
+	}
+	return normalizeGroupMembers(data.admins)
+		.some(member => Number(member.id) == identity.userID);
+}
+
+
+function normalizeGroupMembers(members) {
+	return Array.isArray(members)
+		? members
+			.map(member => {
+				if (typeof member == 'number' || typeof member == 'string') {
+					return { id: Number(member) };
+				}
+				return member && member.id
+					? Object.assign({}, member, { id: Number(member.id) })
+					: null;
+			})
+			.filter(member => member && member.id)
+		: [];
+}
+
 
 function defaultGroupMetadata(groupID, name, identity = null) {
 	identity ||= {
@@ -1038,18 +1869,15 @@ function defaultGroupMetadata(groupID, name, identity = null) {
 	return {
 		id: Number(groupID),
 		name,
+		description: '',
 		owner: identity.userID,
 		type: 'Private',
 		editable: true,
 		filesEditable: true,
-		members: [
-			{
-				id: identity.userID,
-				username: identity.username,
-				name: identity.displayName,
-				role: 'owner'
-			}
-		]
+		libraryEditing: 'members',
+		fileEditing: 'members',
+		admins: [],
+		members: [identity.userID]
 	};
 }
 
@@ -1078,11 +1906,94 @@ function singularLibraryType(plural) {
 	return plural == 'users' ? 'user' : 'group';
 }
 
+
+function parseInteger(value) {
+	let parsed = Number(value);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+
+function parseJSONEnv(name) {
+	let value = process.env[name];
+	if (!value) {
+		return {};
+	}
+	try {
+		let parsed = JSON.parse(value);
+		return parsed && typeof parsed == 'object' && !Array.isArray(parsed) ? parsed : {};
+	}
+	catch (e) {
+		console.warn(`Ignoring invalid ${name}: ${e.message}`);
+		return {};
+	}
+}
+
+
 function csv(value) {
 	if (!value) {
 		return [];
 	}
 	return `${value}`.split(',').map(x => x.trim()).filter(Boolean);
+}
+
+
+function shellQuote(value) {
+	return `'${`${value}`.replace(/'/g, `'"'"'`)}'`;
+}
+
+
+function runCommand(command, args, { input = null } = {}) {
+	return new Promise((resolve, reject) => {
+		let child = spawn(command, args, {
+			stdio: ['pipe', 'pipe', 'pipe']
+		});
+		let stdout = '';
+		let stderr = '';
+		child.stdout.setEncoding('utf8');
+		child.stderr.setEncoding('utf8');
+		child.stdout.on('data', chunk => stdout += chunk);
+		child.stderr.on('data', chunk => stderr += chunk);
+		child.on('error', reject);
+		child.on('close', code => {
+			if (code) {
+				let error = new Error(
+					`${command} ${args.join(' ')} failed with exit code ${code}`
+						+ (stderr ? `: ${stderr.trim()}` : '')
+				);
+				error.status = 500;
+				error.code = 'webdav_access_update_failed';
+				reject(error);
+				return;
+			}
+			resolve(stdout);
+		});
+		child.stdin.end(input || '');
+	});
+}
+
+
+async function readConfiguredTextFile(path) {
+	if (!WEBDAV_GROUP_PASSWD_SSH_HOST) {
+		return fs.readFile(path, 'utf8');
+	}
+	let script = "import pathlib, sys; sys.stdout.write(pathlib.Path(sys.argv[1]).expanduser().read_text())";
+	return runCommand('ssh', [
+		WEBDAV_GROUP_PASSWD_SSH_HOST,
+		`python3 -c ${shellQuote(script)} ${shellQuote(path)}`
+	]);
+}
+
+
+async function writeConfiguredTextFile(path, content) {
+	if (!WEBDAV_GROUP_PASSWD_SSH_HOST) {
+		await fs.writeFile(path, content, 'utf8');
+		return;
+	}
+	let script = "import pathlib, sys; pathlib.Path(sys.argv[1]).expanduser().write_text(sys.stdin.read())";
+	await runCommand('ssh', [
+		WEBDAV_GROUP_PASSWD_SSH_HOST,
+		`python3 -c ${shellQuote(script)} ${shellQuote(path)}`
+	], { input: content });
 }
 
 async function query(sql, params = []) {
@@ -1115,6 +2026,14 @@ async function ensureRuntimeSchema() {
 	);
 	await pool.query(
 		"CREATE INDEX IF NOT EXISTS auth_tokens_user ON auth_tokens (user_id)"
+	);
+	await pool.query(
+		"CREATE SEQUENCE IF NOT EXISTS local_zotero_user_id_seq "
+			+ "START WITH 2000000000 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1"
+	);
+	await pool.query(
+		"CREATE SEQUENCE IF NOT EXISTS local_zotero_group_id_seq "
+			+ "START WITH 2000000000 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1"
 	);
 	try {
 		await pool.query(
@@ -1205,6 +2124,13 @@ function asyncHandler(fn) {
 
 app.use((err, _req, res, _next) => {
 	console.error(err);
+	if (err.status) {
+		res.status(err.status).json({
+			error: err.code || 'request_failed',
+			message: err.message
+		});
+		return;
+	}
 	res.status(500).json({ error: 'internal_error', message: err.message });
 });
 

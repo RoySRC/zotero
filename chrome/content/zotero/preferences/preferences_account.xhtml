@@ -153,10 +153,67 @@
 						<button id="metadata-postgresql-login"
 							data-l10n-id="preferences-sync-metadata-postgresql-login"
 							oncommand="Zotero_Preferences.Sync.loginPostgreSQLMetadataServer()"/>
+						<button id="metadata-postgresql-register"
+							label="Create Account"
+							data-l10n-id="preferences-sync-metadata-postgresql-register"
+							oncommand="Zotero_Preferences.Sync.createPostgreSQLMetadataServerAccount()"/>
+						<button id="metadata-postgresql-show-password-reset"
+							label="Reset Password…"
+							data-l10n-id="preferences-sync-metadata-postgresql-show-password-reset"
+							oncommand="Zotero_Preferences.Sync.showPostgreSQLPasswordReset()"/>
 						<progressmeter id="metadata-progress" hidden="true"
 							mode="undetermined"/>
 					</hbox>
 				</html:div>
+
+				<vbox id="metadata-postgresql-password-reset-settings" hidden="true"
+					style="margin-top: .8em; padding: .7em; border: 1px solid var(--fill-quinary); border-radius: 4px;">
+					<label data-l10n-id="preferences-sync-metadata-postgresql-password-reset-title"
+						style="font-weight: bold;"/>
+					<description data-l10n-id="preferences-sync-metadata-postgresql-password-reset-description"/>
+					<html:div style="display: grid; gap: .65em; margin-top: .5em">
+						<html:div style="display: grid; gap: .25em">
+							<html:label for="metadata-postgresql-reset-current-password"
+								data-l10n-id="preferences-sync-metadata-postgresql-current-password">Current Password (Old Password)</html:label>
+							<html:input id="metadata-postgresql-reset-current-password"
+								type="password"
+								style="width: 100%; box-sizing: border-box;"
+								data-l10n-id="preferences-sync-metadata-postgresql-current-password-placeholder"
+								onkeypress="Zotero_Preferences.Sync.onMetadataPasswordResetKeyPress(event)"/>
+						</html:div>
+
+						<html:div style="display: grid; gap: .25em">
+							<html:label for="metadata-postgresql-reset-new-password"
+								data-l10n-id="preferences-sync-metadata-postgresql-new-password">New Password</html:label>
+							<html:input id="metadata-postgresql-reset-new-password"
+								type="password"
+								style="width: 100%; box-sizing: border-box;"
+								data-l10n-id="preferences-sync-metadata-postgresql-new-password-placeholder"
+								onkeypress="Zotero_Preferences.Sync.onMetadataPasswordResetKeyPress(event)"/>
+						</html:div>
+
+						<html:div style="display: grid; gap: .25em">
+							<html:label for="metadata-postgresql-reset-confirm-new-password"
+								data-l10n-id="preferences-sync-metadata-postgresql-confirm-new-password">Confirm New Password</html:label>
+							<html:input id="metadata-postgresql-reset-confirm-new-password"
+								type="password"
+								style="width: 100%; box-sizing: border-box;"
+								data-l10n-id="preferences-sync-metadata-postgresql-confirm-new-password-placeholder"
+								onkeypress="Zotero_Preferences.Sync.onMetadataPasswordResetKeyPress(event)"/>
+						</html:div>
+
+						<hbox align="center">
+							<button id="metadata-postgresql-reset-password"
+								label="Reset Password"
+								data-l10n-id="preferences-sync-metadata-postgresql-reset-password"
+								oncommand="Zotero_Preferences.Sync.resetPostgreSQLMetadataServerPassword()"/>
+							<button id="metadata-postgresql-cancel-password-reset"
+								label="Cancel"
+								data-l10n-id="preferences-sync-metadata-postgresql-cancel-password-reset"
+								oncommand="Zotero_Preferences.Sync.hidePostgreSQLPasswordReset()"/>
+						</hbox>
+					</html:div>
+				</vbox>
 			</vbox>
 
 			<vbox id="metadata-loading-panel" hidden="true"
@@ -360,7 +417,37 @@
 					<label><html:h3 data-l10n-id="preferences-sync-fileSyncing-library-storage-title"/></label>
 					<description class="storage-profile-description"
 						data-l10n-id="preferences-sync-fileSyncing-library-storage-description"/>
-					<vbox id="storage-library-profile-list"/>
+					<html:div class="storage-library-profile-toolbar">
+						<html:label for="storage-library-profile-search"
+							data-l10n-id="preferences-sync-fileSyncing-library-storage-search">Search libraries:</html:label>
+						<html:input id="storage-library-profile-search"
+							type="search"
+							placeholder="Search by library name"
+							data-l10n-id="preferences-sync-fileSyncing-library-storage-search-placeholder"
+							oninput="Zotero_Preferences.Sync.updateLibraryStorageProfilesUI()"/>
+						<html:button id="storage-library-create"
+							data-l10n-id="preferences-sync-fileSyncing-library-create"
+							onclick="Zotero_Preferences.Sync.openCreatePostgreSQLLibraryDialog()">Create Library</html:button>
+					</html:div>
+					<html:div id="storage-library-profile-table" role="table">
+						<html:div class="storage-library-profile-header-row" role="row">
+							<html:div class="storage-library-profile-cell storage-library-profile-library-header"
+								role="columnheader"
+								data-l10n-id="preferences-sync-fileSyncing-library-storage-column-library">Library</html:div>
+							<html:div class="storage-library-profile-cell storage-library-profile-backend-header"
+								role="columnheader"
+								data-l10n-id="preferences-sync-fileSyncing-library-storage-column-backend">File Storage Backend</html:div>
+							<html:div class="storage-library-profile-cell storage-library-profile-actions-header"
+								role="columnheader"
+								data-l10n-id="preferences-sync-fileSyncing-library-storage-column-actions">Actions</html:div>
+						</html:div>
+						<html:div id="storage-library-profile-list" role="rowgroup"/>
+					</html:div>
+					<label id="storage-library-profile-empty"
+						class="storage-profile-status"
+						hidden="true"
+						data-l10n-id="preferences-sync-fileSyncing-library-storage-no-results"/>
+					<label id="storage-library-profile-status" class="storage-profile-status"/>
 				</vbox>
 
 				<separator class="thin"/>
@@ -412,7 +499,8 @@
 				<separator id="storage-separator" class="thin"/>
 
 				<!-- Group Libraries -->
-				<checkbox data-l10n-id="preferences-sync-fileSyncing-groups"
+				<checkbox id="storage-groups-zotero-storage-option"
+					data-l10n-id="preferences-sync-fileSyncing-groups"
 					preference="extensions.zotero.sync.storage.groups.enabled"
 					oncommand="Zotero_Preferences.Sync.updateStorageSettingsGroupsUI()"
 					native="true"/>
