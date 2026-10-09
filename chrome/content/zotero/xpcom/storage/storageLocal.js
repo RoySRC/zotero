@@ -24,14 +24,20 @@ Zotero.Sync.Storage.Local = {
 	notify: async function (action, type, ids, _extraData) {
 		// Clean up cache on group deletion
 		if (action == 'delete' && type == 'group') {
-			for (let libraryID of ids) {
+			for (let groupID of ids) {
+				let libraryID = _extraData[groupID] && _extraData[groupID].libraryID;
+				if (!libraryID) {
+					continue;
+				}
 				if (this.lastFullFileCheck[libraryID]) {
 					delete this.lastFullFileCheck[libraryID];
 				}
 				if (this.storageRemainingForLibrary.has(libraryID)) {
 					this.storageRemainingForLibrary.delete(libraryID);
 				}
-				Zotero.Sync.Storage.Profiles.clearLibraryProfileByKey(`G${libraryID}`);
+				let libraryProfileKey = `G${groupID}`;
+				Zotero.Sync.Storage.Profiles.clearLibraryProfileByKey(libraryProfileKey);
+				Zotero.Sync.Storage.Profiles.clearWebDAVProjectLibraryByKey(libraryProfileKey);
 			}
 		}
 	},

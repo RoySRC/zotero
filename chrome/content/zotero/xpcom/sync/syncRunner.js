@@ -35,7 +35,9 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 	
 	Zotero.defineProperty(this, 'enabled', {
 		get: () => {
-			return !!_apiKey || Zotero.Sync.Data.Local.hasCachedCredentials;
+			return !!_apiKey
+				|| Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()
+				|| Zotero.Sync.Data.Local.hasCachedCredentials;
 		}
 	});
 	Zotero.defineProperty(this, 'syncInProgress', { get: () => _syncInProgress });
@@ -93,8 +95,15 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 	Zotero.addShutdownListener(() => this.stop());
 	
 	this.getAPIClient = function (options = {}) {
+		let baseURL = this.baseURL;
+		if (options.metadataBackend !== false && Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()) {
+			baseURL = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
+			if (!baseURL) {
+				throw new Error("PostgreSQL metadata server URL not set");
+			}
+		}
 		return new Zotero.Sync.APIClient({
-			baseURL: this.baseURL,
+			baseURL,
 			apiVersion: this.apiVersion,
 			schemaVersion: this.globalSchemaVersion,
 			apiKey: options.apiKey,
@@ -185,6 +194,13 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 			
 			let client = this.getAPIClient({ apiKey });
 			let keyInfo = await this.checkAccess(client, options);
+			let zoteroStorageAPIClient = client;
+			if (Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()) {
+				let zoteroAPIKey = await Zotero.Sync.Data.Local.getAPIKey();
+				zoteroStorageAPIClient = zoteroAPIKey
+					? this.getAPIClient({ apiKey: zoteroAPIKey, metadataBackend: false })
+					: null;
+			}
 			
 			_stopCheck();
 			
@@ -230,7 +246,8 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 				}.bind(this),
 				background: !!options.background,
 				firstInSession: options.firstInSession,
-				resetMode: options.resetMode
+				resetMode: options.resetMode,
+				zoteroStorageAPIClient
 			};
 			
 			var librariesToSync = options.libraries = await this.checkLibraries(
@@ -430,6 +447,20 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 		var access = keyInfo.access;
 		
 		var syncAllLibraries = !libraries || !libraries.length;
+		let webDAVProjectLibraryIDs = Zotero.Sync.Storage.Profiles.getWebDAVProjectLibraryIDs();
+		let webDAVProjectGroupIDs = new Set(
+			webDAVProjectLibraryIDs.map(id => Zotero.Groups.getGroupIDFromLibraryID(id))
+		);
+		let isWebDAVProjectGroupID = groupID => webDAVProjectGroupIDs.has(groupID);
+		let addWebDAVProjectLibraries = () => {
+			let skippedGroups = Zotero.Sync.Data.Local.getSkippedGroups();
+			for (let libraryID of webDAVProjectLibraryIDs) {
+				let groupID = Zotero.Groups.getGroupIDFromLibraryID(libraryID);
+				if (!skippedGroups.includes(groupID)) {
+					libraries.push(libraryID);
+				}
+			}
+		};
 		
 		// TODO: Ability to remove or disable editing of user library?
 		
@@ -445,6 +476,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 					libraries = Zotero.Utilities.arrayDiff(libraries, skippedLibraries);
 				}
 			}
+			addWebDAVProjectLibraries();
 		}
 		else {
 			// Check access to specified libraries
@@ -523,12 +555,14 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 			if (syncAllLibraries) {
 				localGroups = Zotero.Groups.getAll()
 					.map(g => g.id)
+					.filter(id => !isWebDAVProjectGroupID(id))
 					// Don't include skipped groups
 					.filter(id => skippedGroups.indexOf(id) == -1);
 			}
 			else {
 				localGroups = libraries
-					.filter(id => Zotero.Libraries.get(id).libraryType == 'group')
+					.filter(id => Zotero.Libraries.get(id).libraryType == 'group'
+						&& !Zotero.Sync.Storage.Profiles.isWebDAVProjectLibrary(id))
 					.map(id => Zotero.Groups.getGroupIDFromLibraryID(id))
 			}
 			Zotero.debug("Local groups:");
@@ -538,7 +572,8 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 		}
 		// No group access
 		else {
-			remotelyMissingGroups = Zotero.Groups.getAll();
+			remotelyMissingGroups = Zotero.Groups.getAll()
+				.filter(group => !isWebDAVProjectGroupID(group.id));
 		}
 		
 		if (remotelyMissingGroups.length) {
@@ -737,7 +772,19 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 				opts.libraryID = libraryID;
 				
 				let mode = Zotero.Sync.Storage.Local.getModeForLibrary(libraryID);
-				opts.controller = this.getStorageController(mode, opts);
+				if (mode == 'zfs' && !opts.zoteroStorageAPIClient) {
+					Zotero.debug("Zotero Storage file sync is not available for "
+						+ libraryName + " without a zotero.org API key -- skipping");
+					continue;
+				}
+				let controllerOptions = Object.assign({}, opts);
+				if (mode == 'zfs') {
+					controllerOptions.apiClient = opts.zoteroStorageAPIClient;
+				}
+				else if (mode == 'webdav') {
+					controllerOptions.zoteroStorageAPIClient = opts.zoteroStorageAPIClient;
+				}
+				opts.controller = this.getStorageController(mode, controllerOptions);
 				
 				let tries = 3;
 				while (true) {
@@ -880,10 +927,28 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 		
 		var itemID = item.id;
 		var modeClass = Zotero.Sync.Storage.Local.getClassForLibrary(item.libraryID);
-		var controller = new modeClass({
-			apiClient: this.getAPIClient({apiKey }),
+		let zoteroAPIKey = Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()
+			? await Zotero.Sync.Data.Local.getAPIKey()
+			: apiKey;
+		let zoteroStorageAPIClient = zoteroAPIKey
+			? this.getAPIClient({ apiKey: zoteroAPIKey, metadataBackend: false })
+			: null;
+		let controllerOptions = {
+			apiClient: this.getAPIClient({ apiKey }),
 			libraryID: item.libraryID
-		});
+		};
+		if (modeClass == Zotero.Sync.Storage.Mode.ZFS) {
+			if (!zoteroStorageAPIClient) {
+				Zotero.debug("Zotero Storage file download is not available without a "
+					+ "zotero.org API key -- skipping");
+				return false;
+			}
+			controllerOptions.apiClient = zoteroStorageAPIClient;
+		}
+		else if (modeClass == Zotero.Sync.Storage.Mode.WebDAV) {
+			controllerOptions.zoteroStorageAPIClient = zoteroStorageAPIClient;
+		}
+		var controller = new modeClass(controllerOptions);
 		
 		// TODO: verify WebDAV on-demand?
 		if (!controller.verified) {
@@ -1655,7 +1720,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 
 
 	this.createAPIKeyFromCredentials = async function (username, password) {
-		var client = this.getAPIClient();
+		var client = this.getAPIClient({ metadataBackend: false });
 		var json = await client.createAPIKeyFromCredentials(username, password);
 		if (!json) {
 			return false;
@@ -1673,7 +1738,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 
 
 	this.startLoginSession = async function () {
-		let client = this.getAPIClient();
+		let client = this.getAPIClient({ metadataBackend: false });
 		let userID = Zotero.Users.getCurrentUserID();
 		return client.createLoginSession(userID || undefined);
 	}
@@ -1681,7 +1746,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 
 	this.checkLoginSession = async function (sessionToken, result) {
 		if (!result) {
-			let client = this.getAPIClient();
+			let client = this.getAPIClient({ metadataBackend: false });
 			result = await client.checkLoginSession(sessionToken);
 		}
 		// Polling returns { status: "completed", ... }
@@ -1698,7 +1763,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 
 	this.cancelLoginSession = async function (sessionToken) {
 		try {
-			let client = this.getAPIClient();
+			let client = this.getAPIClient({ metadataBackend: false });
 			await client.cancelLoginSession(sessionToken);
 		}
 		catch (e) {
@@ -1711,7 +1776,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 		this.resetStorageController('zfs');
 		this.resetStorageController('webdav');
 		var apiKey = await Zotero.Sync.Data.Local.getAPIKey();
-		var client = this.getAPIClient({apiKey});
+		var client = this.getAPIClient({ apiKey, metadataBackend: false });
 		// Remove streaming subscription before clearing the key
 		await Zotero.Streamer.removeSyncSubscription();
 		await Zotero.Sync.Data.Local.setAPIKey();
@@ -1778,7 +1843,13 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 	
 	var _getAPIKey = function () {
 		// Set as .apiKey on Runner in tests or set in login manager
-		return _apiKey || Zotero.Sync.Data.Local.getAPIKey()
+		if (_apiKey) {
+			return _apiKey;
+		}
+		if (Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()) {
+			return Zotero.Sync.Metadata.getPostgreSQLAPIKey();
+		}
+		return Zotero.Sync.Data.Local.getAPIKey()
 	}
 	
 	

@@ -140,6 +140,7 @@ const xpcomFilesLocal = [
 	'style',
 	'sync',
 	'sync/syncAPIClient',
+	'sync/syncMetadataServer',
 	'sync/syncEngine',
 	'sync/syncExceptions',
 	'sync/syncEventListeners',
