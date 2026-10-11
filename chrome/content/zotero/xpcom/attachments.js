@@ -1170,6 +1170,8 @@ Zotero.Attachments = new function () {
 	 * @param {String} [options.referrer]
 	 * @param {Boolean} [options.enforceFileType] - Delete file if not one of SUPPORTED_FILE_TYPES
 	 * @param {Boolean} [options.shouldDisplayCaptcha]
+	 * @param {Number} [options.errorDelayMax] - Passed to Zotero.HTTP.download()
+	 * @param {Boolean} [options.noRetryOnThrottle] - Passed to Zotero.HTTP.download()
 	 */
 	this.downloadFile = async function (url, path, options = {}) {
 		Zotero.debug(`Downloading file from ${url}`);
@@ -1184,6 +1186,8 @@ Zotero.Attachments = new function () {
 				path,
 				{
 					headers,
+					errorDelayMax: options.errorDelayMax,
+					noRetryOnThrottle: options.noRetryOnThrottle,
 				}
 			);
 			// Check that the downloaded file is the expected type
@@ -1401,7 +1405,12 @@ Zotero.Attachments = new function () {
 									url,
 									{
 										responseType: mode == 'json' ? 'json' : 'document',
-										timeout: 5000
+										timeout: 5000,
+										// Move on to the next resolver instead of waiting on a
+										// failing third-party server, which blocks the rest of
+										// the queue
+										errorDelayMax: 0,
+										noRetryOnThrottle: true
 									}
 								);
 								
@@ -1728,7 +1737,10 @@ Zotero.Attachments = new function () {
 								
 								// Retry-After
 								if (status == 429 || status == 503) {
-									let retryAfter = e.xmlhttp.getResponseHeader('Retry-After');
+									// xmlhttp is a fetch Response for downloads
+									let retryAfter = e.xmlhttp.headers?.get
+										? e.xmlhttp.headers.get('Retry-After')
+										: e.xmlhttp.getResponseHeader('Retry-After');
 									if (retryAfter) {
 										Zotero.debug("Got Retry-After: " + retryAfter);
 										if (parseInt(retryAfter) == retryAfter) {
@@ -1740,7 +1752,7 @@ Zotero.Attachments = new function () {
 											return true;
 										}
 										else if (Zotero.Date.isHTTPDate(retryAfter)) {
-											let d = new Date(val);
+											let d = new Date(retryAfter);
 											if (d > Date.now() + maxDelay * 1000) {
 												Zotero.debug("Retry-After is too long -- skipping request");
 												return false;
@@ -2081,7 +2093,14 @@ Zotero.Attachments = new function () {
 				while (tries-- > 0) {
 					try {
 						await beforeRequest(url);
-						await this.downloadFile(url, path, options);
+						// Waiting here blocks every other item in the queue, so
+						// keep it short and leave longer backoff and Retry-After
+						// to the loop below
+						await this.downloadFile(
+							url,
+							path,
+							{ ...options, errorDelayMax: 7500, noRetryOnThrottle: true }
+						);
 						afterRequest(url);
 						return { url, props: urlResolver };
 					}
@@ -2113,6 +2132,7 @@ Zotero.Attachments = new function () {
 					let domains = new Set();
 					let redirectLimit = 10;
 					let redirectURLTries = new Map();
+					let clearedChallenges = new Set();
 					while (true) {
 						if (redirectLimit == 0) {
 							Zotero.debug("Too many redirects -- stopping");
@@ -2196,6 +2216,29 @@ Zotero.Attachments = new function () {
 							// Check for a meta redirect on HTML pages
 							let refreshURL = Zotero.HTTP.getHTMLMetaRefreshURL(doc, responseURL);
 							if (refreshURL) {
+								// If the refresh points at a known bot-challenge host, the
+								// interstitial runs JS that a plain request can't handle. Run
+								// it once in a hidden browser to store the resulting cookies,
+								// then retry the page over the normal path.
+								let challengeEntry = Zotero.BrowserRequest.getEntryForURL(refreshURL);
+								if (challengeEntry && !clearedChallenges.has(responseURL)) {
+									clearedChallenges.add(responseURL);
+									try {
+										await Zotero.BrowserRequest.clearChallenge(
+											responseURL,
+											{ entry: challengeEntry }
+										);
+										doc = null;
+										nextURL = responseURL;
+										redirectLimit--;
+										continue;
+									}
+									catch (e) {
+										Zotero.debug(`Failed to clear challenge at ${responseURL}: ${e}`);
+										skip = true;
+										break;
+									}
+								}
 								if (isTriedURL(refreshURL)) {
 									Zotero.debug("Meta refresh URL has already been tried -- skipping");
 									skip = true;
@@ -2203,6 +2246,7 @@ Zotero.Attachments = new function () {
 								}
 								doc = null;
 								nextURL = refreshURL;
+								redirectLimit--;
 								continue;
 							}
 							// ProQuest does a JS redirect back to the original page after authenticating

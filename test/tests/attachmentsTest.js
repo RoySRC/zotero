@@ -684,6 +684,8 @@ describe("Zotero.Attachments", function () {
 		var pageURL9 = 'http://website/article9';
 		var pageURL10 = 'http://website/refresh';
 		var pageURL11 = 'http://website/book';
+		var pageURL12 = 'https://www.mdpi.com/2073-4433/16/2/169';
+		var mdpiChallengeCleared = false;
 		
 		var httpd;
 		var port = 16213;
@@ -889,6 +891,20 @@ describe("Zotero.Attachments", function () {
 				if (url == pageURL10) {
 					let html = `<html><head><meta http-equiv=\"refresh\" content=\"2;url=${pageURL1}\"/></head><body></body></html>`;
 					return makeHTMLResponseFromType(html, options.responseType, pageURL10);
+				}
+
+				// MDPI serves an Akamai interstitial (meta-refresh to a bm-verify
+				// URL) until the challenge has been cleared in a hidden browser,
+				// then the real page with a PDF link.
+				if (url == pageURL12) {
+					let html;
+					if (mdpiChallengeCleared) {
+						html = getHTMLPage(true);
+					}
+					else {
+						html = `<html><head><meta http-equiv="refresh" content="5; URL='${pageURL12}?bm-verify=TOKEN'"/></head><body></body></html>`;
+					}
+					return makeHTMLResponseFromType(html, options.responseType, pageURL12);
 				}
 				
 				// OA PDF lookup
@@ -1315,6 +1331,38 @@ describe("Zotero.Attachments", function () {
 			assert.equal(await OS.File.stat(attachment.getFilePath()).size, pdfSize);
 		});
 		
+		it("should clear a bot challenge in a browser and retry the page", async function () {
+			mdpiChallengeCleared = false;
+			// Simulate the hidden browser solving the interstitial: once
+			// clearChallenge() runs, the page stops serving the challenge.
+			let clearStub = sinon.stub(Zotero.BrowserRequest, "clearChallenge").callsFake(async () => {
+				mdpiChallengeCleared = true;
+			});
+			try {
+				var item = createUnsavedDataObject('item', { itemType: 'journalArticle' });
+				item.setField('title', 'Test');
+				item.setField('url', pageURL12);
+				await item.saveTx();
+				var attachment = await Zotero.Attachments.addAvailableFile(item);
+
+				// The challenge is cleared for the page itself, not the one-shot
+				// bm-verify token URL.
+				assert.isTrue(clearStub.calledOnce);
+				assert.equal(clearStub.firstCall.args[0], pageURL12);
+				// Interstitial, then the retried page
+				assert.equal(requestStub.getCall(0).args[1], pageURL12);
+				assert.equal(requestStub.getCall(1).args[1], pageURL12);
+				assert.ok(attachment);
+				var json = attachment.toJSON();
+				assert.equal(json.url, pdfURL);
+				assert.equal(json.contentType, 'application/pdf');
+				assert.equal(await OS.File.stat(attachment.getFilePath()).size, pdfSize);
+			}
+			finally {
+				clearStub.restore();
+			}
+		});
+		
 		it("should stop after too many redirects to the same URL", async function () {
 			var item = createUnsavedDataObject('item', { itemType: 'journalArticle' });
 			item.setField('url', 'http://website/redirect_loop1');
@@ -1488,6 +1536,248 @@ describe("Zotero.Attachments", function () {
 			assert.equal(json.contentType, 'application/pdf');
 			assert.equal(json.filename, 'Test.pdf');
 			assert.equal(await OS.File.stat(attachment.getFilePath()).size, pdfSize);
+		});
+		
+		it("should not retry a custom resolver that returns a server error", async function () {
+			var doi = doi4;
+			var item = createUnsavedDataObject('item', { itemType: 'journalArticle' });
+			item.setField('title', 'Test');
+			item.setField('DOI', doi);
+			await item.saveTx();
+			
+			var requests = 0;
+			httpd.registerPathHandler(
+				"/failing/" + doi,
+				{
+					handle: function (request, response) {
+						requests++;
+						response.setStatusLine(null, 500, "Internal Server Error");
+					}
+				}
+			);
+			
+			var resolvers = [{
+				name: 'Custom',
+				method: 'get',
+				url: baseURL + "failing/{doi}",
+				mode: 'html',
+				selector: '#pdf-link',
+				attribute: 'href'
+			}];
+			Zotero.Prefs.set('findPDFs.resolvers', JSON.stringify(resolvers));
+			
+			var attachment = await Zotero.Attachments.addAvailableFile(item);
+			
+			assert.isFalse(attachment);
+			assert.equal(requests, 1);
+		});
+		
+		it("should give up on a file URL that keeps returning a server error", async function () {
+			var doi = doi4;
+			var item = createUnsavedDataObject('item', { itemType: 'journalArticle' });
+			item.setField('title', 'Test');
+			item.setField('DOI', doi);
+			await item.saveTx();
+			
+			var requests = 0;
+			httpd.registerPathHandler(
+				"/failing-pdf",
+				{
+					handle: function (request, response) {
+						requests++;
+						response.setStatusLine(null, 502, "Bad Gateway");
+					}
+				}
+			);
+			httpd.registerPathHandler(
+				"/failing-pdf-page/" + doi,
+				{
+					handle: function (request, response) {
+						response.setStatusLine(null, 200, "OK");
+						response.write(
+							`<html><body><a id="pdf-link" href="${baseURL}failing-pdf">PDF</a>`
+							+ `</body></html>`
+						);
+					}
+				}
+			);
+			
+			var resolvers = [{
+				name: 'Custom',
+				method: 'get',
+				url: baseURL + "failing-pdf-page/{doi}",
+				mode: 'html',
+				selector: '#pdf-link',
+				attribute: 'href'
+			}];
+			Zotero.Prefs.set('findPDFs.resolvers', JSON.stringify(resolvers));
+			
+			var delayStub = sinon.stub(Zotero.Promise, "delay").returns(Promise.resolve());
+			try {
+				var attachment = await Zotero.Attachments.addAvailableFile(item);
+			}
+			finally {
+				delayStub.restore();
+			}
+			
+			assert.isFalse(attachment);
+			// Initial request plus two retries within errorDelayMax
+			assert.equal(requests, 3);
+		});
+		
+		it("should not wait on a Retry-After from a file URL", async function () {
+			var doi = doi4;
+			var item = createUnsavedDataObject('item', { itemType: 'journalArticle' });
+			item.setField('title', 'Test');
+			item.setField('DOI', doi);
+			await item.saveTx();
+			
+			var requests = 0;
+			httpd.registerPathHandler(
+				"/throttled-pdf",
+				{
+					handle: function (request, response) {
+						requests++;
+						if (requests == 1) {
+							response.setStatusLine(null, 429, "Too Many Requests");
+							response.setHeader("Retry-After", "1", false);
+						}
+						else {
+							response.setStatusLine(null, 404, "Not Found");
+						}
+					}
+				}
+			);
+			httpd.registerPathHandler(
+				"/throttled-pdf-page/" + doi,
+				{
+					handle: function (request, response) {
+						response.setStatusLine(null, 200, "OK");
+						response.write(
+							`<html><body><a id="pdf-link" href="${baseURL}throttled-pdf">PDF</a>`
+							+ `</body></html>`
+						);
+					}
+				}
+			);
+			
+			var resolvers = [{
+				name: 'Custom',
+				method: 'get',
+				url: baseURL + "throttled-pdf-page/{doi}",
+				mode: 'html',
+				selector: '#pdf-link',
+				attribute: 'href'
+			}];
+			Zotero.Prefs.set('findPDFs.resolvers', JSON.stringify(resolvers));
+			
+			var attachment = await Zotero.Attachments.addAvailableFile(item);
+			
+			assert.isFalse(attachment);
+			assert.equal(requests, 1);
+		});
+		
+		async function testThrottledFileURL(retryAfter) {
+			var doi = doi4;
+			var item = createUnsavedDataObject('item', { itemType: 'journalArticle' });
+			item.setField('title', 'Test');
+			item.setField('DOI', doi);
+			await item.saveTx();
+			
+			var requestTimes = [];
+			httpd.registerPathHandler(
+				"/throttled-pdf",
+				{
+					handle: function (request, response) {
+						requestTimes.push(Date.now());
+						if (requestTimes.length == 1) {
+							response.setStatusLine(null, 429, "Too Many Requests");
+							response.setHeader("Retry-After", retryAfter(), false);
+						}
+						else {
+							response.setStatusLine(null, 302, "Found");
+							response.setHeader("Location", pdfURL, false);
+						}
+					}
+				}
+			);
+			httpd.registerPathHandler(
+				"/throttled-pdf-page/" + doi,
+				{
+					handle: function (request, response) {
+						response.setStatusLine(null, 200, "OK");
+						response.write(
+							// Use an address that isn't exempt from per-domain delays
+							`<html><body><a id="pdf-link" href="http://127.0.0.1:${port}/throttled-pdf">PDF</a>`
+							+ `</body></html>`
+						);
+					}
+				}
+			);
+			
+			var resolvers = [{
+				name: 'Custom',
+				method: 'get',
+				url: baseURL + "throttled-pdf-page/{doi}",
+				mode: 'html',
+				selector: '#pdf-link',
+				attribute: 'href'
+			}];
+			Zotero.Prefs.set('findPDFs.resolvers', JSON.stringify(resolvers));
+			
+			await Zotero.Attachments.addAvailableFiles([item]);
+			
+			assert.equal(item.numAttachments(), 1);
+			assert.lengthOf(requestTimes, 2);
+			return requestTimes[1] - requestTimes[0];
+		}
+		
+		it("should retry a file URL after a Retry-After in seconds when finding files for multiple items", async function () {
+			var elapsed = await testThrottledFileURL(() => "1");
+			assert.isAtLeast(elapsed, 950);
+		});
+		
+		it("should retry a file URL after a Retry-After date when finding files for multiple items", async function () {
+			var elapsed = await testThrottledFileURL(
+				() => new Date(Date.now() + 2000).toUTCString()
+			);
+			// HTTP dates have one-second resolution
+			assert.isAtLeast(elapsed, 950);
+		});
+		
+		it("should not honor Retry-After from a custom resolver", async function () {
+			var doi = doi4;
+			var item = createUnsavedDataObject('item', { itemType: 'journalArticle' });
+			item.setField('title', 'Test');
+			item.setField('DOI', doi);
+			await item.saveTx();
+			
+			var requests = 0;
+			httpd.registerPathHandler(
+				"/throttled/" + doi,
+				{
+					handle: function (request, response) {
+						requests++;
+						response.setStatusLine(null, 429, "Too Many Requests");
+						response.setHeader("Retry-After", "3600");
+					}
+				}
+			);
+			
+			var resolvers = [{
+				name: 'Custom',
+				method: 'get',
+				url: baseURL + "throttled/{doi}",
+				mode: 'html',
+				selector: '#pdf-link',
+				attribute: 'href'
+			}];
+			Zotero.Prefs.set('findPDFs.resolvers', JSON.stringify(resolvers));
+			
+			var attachment = await Zotero.Attachments.addAvailableFile(item);
+			
+			assert.isFalse(attachment);
+			assert.equal(requests, 1);
 		});
 	});
 	

@@ -353,6 +353,8 @@ item-menu-change-parent-item =
      .label = Change Parent Item…
 item-menu-relate-items =
     .label = Relate Items
+item-menu-unrelate-items =
+    .label = Unrelate Items
 
 view-online = View Online
 item-menu-option-view-online =
@@ -1187,6 +1189,7 @@ plugins-blocked-plugin =
     .message = This plugin has been disabled by { -app-name }.
 
 data-dir-unsupported-storage = This can happen if the { -app-name } data directory is in a cloud storage folder (OneDrive, Dropbox, etc.) or on a network share.
+data-dir-check-parent-write-access = Make sure you have write access to { $path } and that security software isn’t preventing { -app-name } from writing to the disk.
 
 login-manager-reset = { -app-name } was unable to read your saved login information, so it has been reset. Please log in again in the { preferences-pane-account } pane of the { -app-name } settings.
 
@@ -1333,6 +1336,8 @@ undo-action-convert-to-standalone = { $count ->
 }
 undo-action-add-related = Add Related
 undo-action-remove-related = Remove Related
+undo-action-relate-items = Relate Items
+undo-action-unrelate-items = Unrelate Items
 undo-action-merge-items = { $count ->
     [one] Merge Item
    *[other] Merge { $count } Items
