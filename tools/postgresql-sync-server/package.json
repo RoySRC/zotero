@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"start": "node src/server.mjs",
+		"test": "node --test test/*.test.mjs",
 		"import:zotero": "node src/import-from-zotero.mjs",
 		"user:password": "node src/set-user-password.mjs"
 	},

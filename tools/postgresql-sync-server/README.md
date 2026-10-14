@@ -38,6 +38,19 @@ npm start
 
 The server listens on `http://localhost:23129/` by default.
 
+## Tests
+
+```sh
+TEST_DATABASE_URL="$DATABASE_URL" npm test
+```
+
+The integration tests create and remove a separate, randomly named PostgreSQL
+database and start a test server on an available port. The connection's role
+must have `CREATEDB` permission. The supplied database is not modified. Without
+`TEST_DATABASE_URL`, the integration tests are skipped.
+
+## Authentication
+
 Authentication is database-backed. Imported Zotero identities are stored in
 `users`, login passwords are stored as PBKDF2 hashes in PostgreSQL, and successful
 logins issue per-user API tokens stored in `auth_tokens`. Runtime

@@ -680,13 +680,23 @@ async function uploadObjects(req, res) {
 				};
 				continue;
 			}
+			// Bulk POSTs also contain patches, including collection trash/restore updates.
 			let shouldMerge = existingRow
-				&& (req.method == 'PATCH' || isPartialItemUpdate(objectType, object));
+				&& (req.method == 'PATCH' || objectType != 'item'
+					|| isPartialItemUpdate(objectType, object));
 			let data = shouldMerge
 				? Object.assign({}, existingRow.data, object)
 				: Object.assign({}, object);
 			if (objectType == 'item' && !data.itemType) {
 				failed[i] = { code: 400, message: 'itemType property not provided' };
+				continue;
+			}
+			if (objectType != 'item' && (typeof data.name != 'string' || !data.name.trim())) {
+				failed[i] = { code: 400, message: `A non-empty name is required for ${objectType}` };
+				continue;
+			}
+			if (objectType == 'search' && !Array.isArray(data.conditions)) {
+				failed[i] = { code: 400, message: 'Search conditions must be an array' };
 				continue;
 			}
 			data.key = key;
