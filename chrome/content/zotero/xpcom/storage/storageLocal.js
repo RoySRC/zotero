@@ -762,9 +762,9 @@ Zotero.Sync.Storage.Local = {
 				}
 				catch (e) {}
 				// TODO: localize
-				var msg = "Due to a Windows path length limitation, your Zotero data directory "
+				var msg = "Due to a Windows path length limitation, your EpiLib data directory "
 					+ "is too deep in the filesystem for syncing to work reliably. "
-					+ "Please relocate your Zotero data to a higher directory.";
+					+ "Please relocate your EpiLib data to a higher directory.";
 				Zotero.debug(msg, 1);
 				throw new Error(msg);
 			}
@@ -946,9 +946,9 @@ Zotero.Sync.Storage.Local = {
 					Cu.forceGC();
 					
 					// TODO: localize
-					var msg = "Due to a Windows path length limitation, your Zotero data directory "
+					var msg = "Due to a Windows path length limitation, your EpiLib data directory "
 						+ "is too deep in the filesystem for syncing to work reliably. "
-						+ "Please relocate your Zotero data to a higher directory.";
+						+ "Please relocate your EpiLib data to a higher directory.";
 					Zotero.debug(msg, 1);
 					throw new Error(msg);
 				}

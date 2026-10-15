@@ -153,13 +153,13 @@
     "message": "Mentés engedélyezése online könyvtárba"
   },
   "reports_report_submitted": {
-    "message": "Hibajelentése elküldésre került.\n\nReport ID: $1\n\nKérjük, tegyen közzé egy üzenetet a Zotero fórumokon ezzel a Report ID, a probléma leírásával és a probléma reprodukálásához szükséges lépésekkel.\n\nA hibajelentéseket csak akkor vizsgáljuk meg, ha azok a fórumokon is megjelennek."
+    "message": "Hibajelentése elküldésre került.\n\nReport ID: $1\n\nKérjük, tegyen közzé egy üzenetet an EpiLib fórumokon ezzel a Report ID, a probléma leírásával és a probléma reprodukálásához szükséges lépésekkel.\n\nA hibajelentéseket csak akkor vizsgáljuk meg, ha azok a fórumokon is megjelennek."
   },
   "reports_debug_output_submitted": {
     "message": "A hibakeresés eredménye elküldve.\n\nA hibaazonosító$1."
   },
   "reports_submission_failed": {
-    "message": "Hiba történt a jelentés elküldése közben.\n\n$1\n\nKérjük, ellenőrizze az internetkapcsolatát. Ha a probléma továbbra is fennáll, írjon üzenetet a Zotero Fórumára."
+    "message": "Hiba történt a jelentés elküldése közben.\n\n$1\n\nKérjük, ellenőrizze az internetkapcsolatát. Ha a probléma továbbra is fennáll, írjon üzenetet an EpiLib Fórumára."
   },
   "integration_error_clientUpgrade": {
     "message": "A webalapú hivatkozáshoz szükség van $1 vagy későbbire."

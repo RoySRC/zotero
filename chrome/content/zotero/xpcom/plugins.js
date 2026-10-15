@@ -768,13 +768,13 @@ Zotero.Plugins = new function () {
 			versionRanges: [{
 				maxVersion: "8.999"
 			}],
-			reason: "Versions of this plugin prior to version 9.0 prevent Zotero from closing properly and cannot be automatically updated.",
+			reason: "Versions of this plugin prior to version 9.0 prevent EpiLib from closing properly and cannot be automatically updated.",
 		},
 		"zoterostyle@polygon.org": {
 			versionRanges: [{
 				maxVersion: "4.5.99"
 			}],
-			reason: "Versions of this plugin prior to version 4.6.0 break the Zotero user interface.",
+			reason: "Versions of this plugin prior to version 4.6.0 break the EpiLib user interface.",
 		}
 	};
 	function getBlockedPlugins() {

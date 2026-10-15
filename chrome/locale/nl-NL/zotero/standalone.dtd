@@ -6,7 +6,7 @@
 <!ENTITY hideOtherAppsCmdMac.label "Overige verbergen">
 <!ENTITY hideOtherAppsCmdMac.commandkey "H">
 <!ENTITY showAllAppsCmdMac.label "Alles tonen">
-<!ENTITY quitApplicationCmdMac.label "Zotero afsluiten">
+<!ENTITY quitApplicationCmdMac.label "EpiLib afsluiten">
 <!ENTITY quitApplicationCmdMac.key "Q">
 
 <!ENTITY fileMenu.label "Bestand">
@@ -73,7 +73,7 @@
 <!ENTITY helpMenuWin.label "Help">
 <!ENTITY helpMenuWin.accesskey "H">
 <!ENTITY helpMac.commandkey "?">
-<!ENTITY aboutProduct.label "Over Zotero">
+<!ENTITY aboutProduct.label "Over EpiLib">
 <!ENTITY aboutProduct.accesskey "O">
 <!ENTITY productHelp.label "Ondersteuning en Documentatie">
 <!ENTITY productHelp.accesskey "D">

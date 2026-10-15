@@ -111,7 +111,8 @@ pref("extensions.experiments.enabled", true);
 
 // Not set on Windows in Firefox anymore since it's a per-installation pref,
 // but we override that in fetch_xulrunner
-pref("app.update.auto", true);
+// The retained upstream URL is not an EpiLib release feed.
+pref("app.update.auto", false);
 
 // URL user can browse to manually if for some reason all update installation
 // attempts fail.

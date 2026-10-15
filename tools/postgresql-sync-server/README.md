@@ -1,6 +1,6 @@
-# Zotero PostgreSQL Sync Server
+# EpiLib PostgreSQL Sync Server
 
-Experimental metadata-sync server for the custom Zotero build. WebDAV remains
+Experimental metadata-sync server for the custom EpiLib build. WebDAV remains
 the file/blob backend; this service replaces WebDAV metadata sync with a
 PostgreSQL-backed Zotero-style sync API.
 
@@ -64,15 +64,15 @@ npm run user:password -- --username sajeeb
 ```
 
 The login identity comes from the imported `users` row, so use that row's
-`username` in Zotero's Account pane. On successful login the server returns a
+`username` in EpiLib's Account pane. On successful login the server returns a
 fresh per-user API token plus any saved sync settings from `/sync/settings`.
 
-New users can also be created from Zotero's PostgreSQL account pane. The first
+New users can also be created from EpiLib's PostgreSQL account pane. The first
 user on an empty PostgreSQL server can be created without a token. After that,
 `POST /auth/register` requires an existing PostgreSQL account token, so log in
 first before creating additional local users.
 
-Passwords can be reset from Zotero's PostgreSQL account pane by entering the
+Passwords can be reset from EpiLib's PostgreSQL account pane by entering the
 username, current password, and new password. The server verifies the current
 password with `POST /auth/password`, updates the stored password hash, revokes
 existing tokens for that user, and returns a fresh token.
@@ -114,9 +114,9 @@ The profile/group map accepts either profile IDs or normalized WebDAV profile
 URLs as keys. The username map accepts either PostgreSQL usernames or Zotero user
 IDs as keys.
 
-## Configure the custom Zotero app
+## Configure the custom EpiLib app
 
-In Zotero's Run JavaScript window:
+In EpiLib's Run JavaScript window:
 
 ```js
 await Zotero.Sync.Metadata.configurePostgreSQL({

@@ -673,7 +673,7 @@ Zotero.Integration.confirmExportDocument = function () {
 Zotero.Integration.MissingItemException = function (item) {this.item = item;};
 Zotero.Integration.MissingItemException.prototype = {
 	"name":"MissingItemException",
-	"message":`An item in this document is missing from your Zotero library.}`,
+	"message":`An item in this document is missing from your EpiLib library.}`,
 	"toString":function () { return this.message + `\n ${JSON.stringify(this.item)}` }
 };
 

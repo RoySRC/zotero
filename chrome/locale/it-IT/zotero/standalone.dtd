@@ -6,7 +6,7 @@
 <!ENTITY hideOtherAppsCmdMac.label "Nascondi gli altri">
 <!ENTITY hideOtherAppsCmdMac.commandkey "H">
 <!ENTITY showAllAppsCmdMac.label "Mostra tutti">
-<!ENTITY quitApplicationCmdMac.label "Esci da Zotero">
+<!ENTITY quitApplicationCmdMac.label "Esci da EpiLib">
 <!ENTITY quitApplicationCmdMac.key "Q">
 
 <!ENTITY fileMenu.label "File">
@@ -61,7 +61,7 @@
 
 <!ENTITY toolsMenu.label "Strumenti">
 <!ENTITY toolsMenu.accesskey "T">
-<!ENTITY installConnector.label "Installa Zotero Connector per il browser…">
+<!ENTITY installConnector.label "Installa EpiLib Connector per il browser…">
 <!ENTITY installConnector.accesskey "C">
 <!ENTITY addons.label "Estensioni">
 <!ENTITY developer.label "Sviluppatore">

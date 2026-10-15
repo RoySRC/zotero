@@ -29,7 +29,7 @@
 <!ENTITY zotero.errorReport.submissionInProgress "Моля изчакайте докато бъде подаден отчета с грешките.">
 <!ENTITY zotero.errorReport.submitted "Отчета с грешките беше подаден.">
 <!ENTITY zotero.errorReport.reportID "Идентификационен номер на отчета:">
-<!ENTITY zotero.errorReport.postToForums "Моля оставете съобщение във форумите на Zotero (forums.zotero.org) с идентификационият номер на отчета, описание на проблема и стъпките необходими, за да бъде възпроизведен.">
+<!ENTITY zotero.errorReport.postToForums "Моля оставете съобщение във форумите на EpiLib (forums.zotero.org) с идентификационият номер на отчета, описание на проблема и стъпките необходими, за да бъде възпроизведен.">
 <!ENTITY zotero.errorReport.notReviewed "В общия случай, отчетите с грешки няма да бъдат разглеждани, освен ако не са оповестени във форумите.">
 
 <!ENTITY zotero.upgrade.title "Помощник за актуализиране на Зотеро">

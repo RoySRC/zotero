@@ -340,7 +340,7 @@ var Zotero_LocateMenu = new function () {
   	 */
 	function _openLocateEngineManager(event) {
 		window.openDialog('chrome://zotero/content/locateManager.xhtml',
-			'Zotero Locate Engine Manager',
+			'EpiLib Locate Engine Manager',
 			'chrome,centerscreen'
 		);
 	}

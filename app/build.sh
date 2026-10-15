@@ -682,10 +682,10 @@ find "$BUILD_DIR" -name .DS_Store -exec rm -f {} \;
 
 # Mac
 if [ $BUILD_MAC == 1 ]; then
-	echo 'Building Zotero.app'
+	echo 'Building EpiLib.app'
 		
 	# Set up directory structure
-	APPDIR="$STAGE_DIR/Zotero.app"
+	APPDIR="$STAGE_DIR/EpiLib.app"
 	rm -rf "$APPDIR"
 	mkdir "$APPDIR"
 	chmod 755 "$APPDIR"
@@ -745,6 +745,7 @@ if [ $BUILD_MAC == 1 ]; then
 	mkdir "$CONTENTSDIR/Resources/integration"
 	cp -RH "$CALLDIR/modules/zotero-libreoffice-integration/install" "$CONTENTSDIR/Resources/integration/libreoffice"
 	cp -RH "$CALLDIR/modules/zotero-word-for-mac-integration/install" "$CONTENTSDIR/Resources/integration/word-for-mac"
+	python3 "$CALLDIR/../tools/branding/rebrand-integrations.py" "$CONTENTSDIR/Resources/integration"
 	
 	# Delete extraneous files
 	find "$CONTENTSDIR" -depth -type d -name .git -exec rm -rf {} \;
@@ -900,13 +901,16 @@ if [ $BUILD_MAC == 1 ]; then
 	fi
 	
 	# Build and notarize disk image
+	# Preserve existing development launch commands while distributing the branded bundle.
+	rm -rf "$STAGE_DIR/Zotero.app"
+	ln -s EpiLib.app "$STAGE_DIR/Zotero.app"
 	if [ $PACKAGE == 1 ]; then
 		if [ $MAC_NATIVE == 1 ]; then
 			echo "Creating Mac installer"
-			dmg="$DIST_DIR/Zotero-$VERSION.dmg"
-			"$CALLDIR/mac/pkg-dmg" --source "$STAGE_DIR/Zotero.app" \
+			dmg="$DIST_DIR/EpiLib-$VERSION.dmg"
+			"$CALLDIR/mac/pkg-dmg" --source "$APPDIR" \
 				--target "$dmg" \
-				--sourcefile --volname Zotero --copy "$CALLDIR/mac/DSStore:/.DS_Store" \
+				--sourcefile --volname EpiLib \
 				--symlink /Applications:"/Drag Here to Install" > /dev/null
 			
 			if [ "$UPDATE_CHANNEL" != "test" ]; then
@@ -924,8 +928,8 @@ if [ $BUILD_MAC == 1 ]; then
 			echo
 		else
 			echo 'Not building on Mac; creating Mac distribution as a zip file'
-			rm -f "$DIST_DIR/Zotero_mac.zip"
-			cd "$STAGE_DIR" && zip -rqX "$DIST_DIR/Zotero-${VERSION}_mac.zip" Zotero.app
+			rm -f "$DIST_DIR/EpiLib_mac.zip"
+			cd "$STAGE_DIR" && zip -rqX "$DIST_DIR/EpiLib-${VERSION}_mac.zip" EpiLib.app
 		fi
 	fi
 fi
@@ -987,10 +991,15 @@ if [ $BUILD_WIN == 1 ]; then
 			# version string.
 			rcedit "`cygpath -w \"$APPDIR/zotero.exe\"`" \
 				--set-file-version "$VERSION_NUMERIC" \
-				--set-product-version "$VERSION"
+				--set-product-version "$VERSION" \
+				--set-version-string ProductName "EpiLib" \
+				--set-version-string FileDescription "EpiLib" \
+				--set-icon "`cygpath -w \"$CALLDIR/win/zotero.ico\"`"
 			rcedit "`cygpath -w \"$APPDIR/updater.exe\"`" \
 				--set-file-version "$VERSION_NUMERIC" \
-				--set-product-version "$VERSION"
+				--set-product-version "$VERSION" \
+				--set-version-string ProductName "EpiLib" \
+				--set-version-string FileDescription "EpiLib Updater"
 		fi
 		
 		# Copy app files
@@ -1022,6 +1031,7 @@ if [ $BUILD_WIN == 1 ]; then
 		mkdir -p "$APPDIR/integration"
 		cp -RH "$CALLDIR/modules/zotero-libreoffice-integration/install" "$APPDIR/integration/libreoffice"
 		cp -RH "$CALLDIR/modules/zotero-word-for-windows-integration/install" "$APPDIR/integration/word-for-windows"
+		python3 "$CALLDIR/../tools/branding/rebrand-integrations.py" "$APPDIR/integration"
 		if [ $arch = 'win32' ]; then
 			rm "$APPDIR/integration/word-for-windows/libzoteroWinWordIntegration_x64.dll"
 			rm "$APPDIR/integration/word-for-windows/libzoteroWinWordIntegration_ARM64.dll"
@@ -1081,11 +1091,11 @@ if [ $BUILD_WIN == 1 ]; then
 				fi
 				
 				if [ "$arch" = "win32" ]; then
-					INSTALLER_PATH="$DIST_DIR/Zotero-${VERSION}_win32_setup.exe"
+					INSTALLER_PATH="$DIST_DIR/EpiLib-${VERSION}_win32_setup.exe"
 				elif [ "$arch" = "win-x64" ]; then
-					INSTALLER_PATH="$DIST_DIR/Zotero-${VERSION}_x64_setup.exe"
+					INSTALLER_PATH="$DIST_DIR/EpiLib-${VERSION}_x64_setup.exe"
 				elif [ "$arch" = "win-arm64" ]; then
-					INSTALLER_PATH="$DIST_DIR/Zotero-${VERSION}_arm64_setup.exe"
+					INSTALLER_PATH="$DIST_DIR/EpiLib-${VERSION}_arm64_setup.exe"
 				fi
 				
 				# Stage installer
@@ -1128,7 +1138,7 @@ if [ $BUILD_WIN == 1 ]; then
 				echo 'Not building on Windows; only building zip file'
 			fi
 			cd "$STAGE_DIR"
-			zip -rqX "$DIST_DIR/Zotero-${VERSION}_$arch.zip" Zotero_$arch
+			zip -rqX "$DIST_DIR/EpiLib-${VERSION}_$arch.zip" Zotero_$arch
 		fi
 	done
 	
@@ -1176,6 +1186,8 @@ if [ $BUILD_LINUX == 1 ]; then
 		mkdir "$APPDIR/integration"
 		cp -RH "$CALLDIR/modules/zotero-libreoffice-integration/install" "$APPDIR/integration/libreoffice"
 		
+		python3 "$CALLDIR/../tools/branding/rebrand-integrations.py" "$APPDIR/integration"
+
 		# Firefox includes an 'icons' folder with updater.png, but some Linux distro builds omit it
 		mkdir -p "$APPDIR/icons"
 		# Copy icons
@@ -1200,9 +1212,9 @@ if [ $BUILD_LINUX == 1 ]; then
 		
 		if [ $PACKAGE == 1 ]; then
 			# Create tar
-			rm -f "$DIST_DIR/Zotero-${VERSION}_linux-$arch.tar.xz"
+			rm -f "$DIST_DIR/EpiLib-${VERSION}_linux-$arch.tar.xz"
 			cd "$STAGE_DIR"
-			tar -cJf "$DIST_DIR/Zotero-${VERSION}_linux-$arch.tar.xz" "Zotero_linux-$arch"
+			tar -cJf "$DIST_DIR/EpiLib-${VERSION}_linux-$arch.tar.xz" "Zotero_linux-$arch"
 		fi
 	done
 fi

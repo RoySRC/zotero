@@ -168,13 +168,13 @@
     "message": "Įgalinti įrašymą į internetinę biblioteką"
   },
   "reports_report_submitted": {
-    "message": "Jūsų klaidos pranešimas išsiųstas.\n\nPranešimo ID: $1\n\nPrašome paskelbti žinutę Zotero forume su šio pranešimo ID, problemos aprašymu ir visais žingsniais, reikalingais jos atkartojimui.\n\nKlaidos pranešimai peržiūrimi tik jei paminimi forume."
+    "message": "Jūsų klaidos pranešimas išsiųstas.\n\nPranešimo ID: $1\n\nPrašome paskelbti žinutę EpiLib forume su šio pranešimo ID, problemos aprašymu ir visais žingsniais, reikalingais jos atkartojimui.\n\nKlaidos pranešimai peržiūrimi tik jei paminimi forume."
   },
   "reports_debug_output_submitted": {
     "message": "Jūsų derinimo išvestis išsiųsta.\n\nDerinimo ID yra $1."
   },
   "reports_submission_failed": {
-    "message": "Įvyko klaida išsiunčiant jūsų ataskaitą.\n\n$1\n\nPatikrinkite savo interneto ryšį. Jei problema išlieka, parašykite žinutę į Zotero forumą."
+    "message": "Įvyko klaida išsiunčiant jūsų ataskaitą.\n\n$1\n\nPatikrinkite savo interneto ryšį. Jei problema išlieka, parašykite žinutę į EpiLib forumą."
   },
   "integration_error_clientUpgrade": {
     "message": "Saityno pagrindu veikiančiam citavimui reikia $1 arba naujesnės versijos."
@@ -183,10 +183,10 @@
     "message": "„$1“ nepajėgia pasiekti „$2“ darbalaukio programos. Norint naudotis saityno pagrindu veikiančiu citavimu, „$2“ vis tiek turi būti atverta."
   },
   "integration_googleDocs_unlinkBeforeSaving_warning": {
-    "message": "Šiame dokumente yra aktyvių Zotero citavimų, kurie parsisiųstoje kopijoje atrodys tarsi nuorodos į zotero.org."
+    "message": "Šiame dokumente yra aktyvių EpiLib citavimų, kurie parsisiųstoje kopijoje atrodys tarsi nuorodos į zotero.org."
   },
   "integration_googleDocs_unlinkBeforeSaving_instructions": {
-    "message": "Norėdami sukurti tinkamą versiją bendradarbiavimui, pasirinkite <b>Sukurti kopiją...</b> iš Failo meniu, naujame dokumente pasirinkite iš Zotero meniu pasirinkite <b>Atsieti citatas</b>  ir tada atsisiųskite atsietą versiją. Laikykite šį pradinį susietą dokumentą ateičiai, jei kartais prireiktų tolesnių pakeitimų."
+    "message": "Norėdami sukurti tinkamą versiją bendradarbiavimui, pasirinkite <b>Sukurti kopiją...</b> iš Failo meniu, naujame dokumente pasirinkite iš EpiLib meniu pasirinkite <b>Atsieti citatas</b>  ir tada atsisiųskite atsietą versiją. Laikykite šį pradinį susietą dokumentą ateičiai, jei kartais prireiktų tolesnių pakeitimų."
   },
   "integration_googleDocs_unlinkBeforeSaving_downloadAnyway": {
     "message": "Vis tiek parsisiųsti susietą versiją"

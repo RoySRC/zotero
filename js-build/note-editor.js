@@ -48,6 +48,7 @@ async function getZoteroNoteEditor(signatures) {
 		signatures['note-editor'] = { hash };
 	}
 	
+	await require('./branding')(path.join(__dirname, '..', 'build', 'resource', 'note-editor'));
 	const t2 = Date.now();
 
 	return {

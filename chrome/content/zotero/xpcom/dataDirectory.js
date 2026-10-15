@@ -42,7 +42,7 @@ Zotero.DataDirectory = {
 		if (CommandLineOptions.test) {
 			return OS.Path.join(PathUtils.parent(OS.Constants.Path.profileDir), "Zotero");
 		}
-		return OS.Path.join(OS.Constants.Path.homeDir, ZOTERO_CONFIG.CLIENT_NAME);
+		return OS.Path.join(OS.Constants.Path.homeDir, ZOTERO_CONFIG.DATA_DIRECTORY_NAME);
 	},
 	
 	get legacyDirName() {
