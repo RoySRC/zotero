@@ -19,9 +19,9 @@
 !define WindowClass           "ZoteroMessageWindow"
 !define AppRegName            "Zotero"
 
-!define BrandShortName        "Zotero"
+!define BrandShortName        "EpiLib"
 !define PreReleaseSuffix      ""
-!define BrandFullName         "${BrandFullNameInternal}${PreReleaseSuffix}"
+!define BrandFullName         "${BrandShortName}${PreReleaseSuffix}"
 
 !define NO_UNINSTALL_SURVEY
 

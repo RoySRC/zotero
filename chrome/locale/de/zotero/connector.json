@@ -174,7 +174,7 @@
     "message": "Ihr Debug-Output wurde übermittelt.\n\nDie Debug-ID lautet $1."
   },
   "reports_submission_failed": {
-    "message": "Bei der Übermittlung Ihres Berichts ist ein Fehler aufgetreten.\n\n$1\n\nBitte prüfen Sie Ihre Internetverbindung. Falls das Problem bestehen bleibt, schreiben Sie einen Beitrag im Zotero Forum."
+    "message": "Bei der Übermittlung Ihres Berichts ist ein Fehler aufgetreten.\n\n$1\n\nBitte prüfen Sie Ihre Internetverbindung. Falls das Problem bestehen bleibt, schreiben Sie einen Beitrag im EpiLib Forum."
   },
   "integration_error_clientUpgrade": {
     "message": "Web-basiertes Zitieren benötigt $1 oder später."
@@ -183,10 +183,10 @@
     "message": "Die $1 war nicht in der Lage mit der $2 Desktop Applikation zu kommunizieren. $2 muss geöffnet sein zum web-basierten Zitieren."
   },
   "integration_googleDocs_unlinkBeforeSaving_warning": {
-    "message": "Dieses Dokument enthält aktive Zitationen aus Zotero, die in einer heruntergeladenen Kopie als zotero.org-Links erscheinen."
+    "message": "Dieses Dokument enthält aktive Zitationen aus EpiLib, die in einer heruntergeladenen Kopie als zotero.org-Links erscheinen."
   },
   "integration_googleDocs_unlinkBeforeSaving_instructions": {
-    "message": "Um eine zum Teilen geeignete Version zu erzeugen, wählen Sie im Menü Datei den Befehl <b>Kopie erstellen…</b>, wählen Sie <b>Unlink Citations</b> aus dem Menü Zotero und laden Sie dann die unverknüpfte Version herunter. Bewahren Sie dieses Originaldokument mit den Verknüpfungen auf, falls Sie weitere Änderungen vornehmen müssen."
+    "message": "Um eine zum Teilen geeignete Version zu erzeugen, wählen Sie im Menü Datei den Befehl <b>Kopie erstellen…</b>, wählen Sie <b>Unlink Citations</b> aus dem Menü EpiLib und laden Sie dann die unverknüpfte Version herunter. Bewahren Sie dieses Originaldokument mit den Verknüpfungen auf, falls Sie weitere Änderungen vornehmen müssen."
   },
   "integration_googleDocs_unlinkBeforeSaving_downloadAnyway": {
     "message": "Verknüpfte Version trotzdem herunterladen"

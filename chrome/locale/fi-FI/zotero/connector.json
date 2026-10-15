@@ -159,7 +159,7 @@
     "message": "Onko $1 käynnissä?"
   },
   "error_connection_save": {
-    "message": "$1 ei saanut yhteyttä $2-työpöytäsovellukseen. Zotero Connector pystyy tallentamaan joitain sivuja $3-tilille, mutta paras toimivuus saavutetaan, jos avaat $2n ennen kuin yrität tallentaa."
+    "message": "$1 ei saanut yhteyttä $2-työpöytäsovellukseen. EpiLib Connector pystyy tallentamaan joitain sivuja $3-tilille, mutta paras toimivuus saavutetaan, jos avaat $2n ennen kuin yrität tallentaa."
   },
   "error_connection_downloadOrTroubleshoot": {
     "message": "Voit <a href=\"$1\">ladata $2</a> tai <a href=\"$3\">suorittaa tarvittaessa yhteyden vianmäärityksen</a>. "

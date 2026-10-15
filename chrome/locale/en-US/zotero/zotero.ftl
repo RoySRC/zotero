@@ -1142,7 +1142,7 @@ post-upgrade-done =
 text-action-paste-and-search =
     .label = Paste and Search
     
-mac-word-plugin-install-message = Zotero needs access to Word data to install the Word plugin.
+mac-word-plugin-install-message = EpiLib needs access to Word data to install the Word plugin.
 mac-word-plugin-install-folder-message = { -app-name } needs access to Word’s startup folder to install the Word plugin.
 mac-word-plugin-install-action-button =
     .label = Install Word plugin

@@ -1,8 +1,8 @@
--brand-shorter-name = Zotero
--brand-short-name = Zotero
--brand-full-name = Zotero
--brand-product-name = Zotero
--vendor-short-name = Zotero
--app-name = Zotero
+-brand-shorter-name = EpiLib
+-brand-short-name = EpiLib
+-brand-full-name = EpiLib
+-brand-product-name = EpiLib
+-vendor-short-name = EpiLib
+-app-name = EpiLib
 -subscription-name = Zotero Storage
 trademarkInfo = Zotero is a trademark of the Corporation for Digital Scholarship.

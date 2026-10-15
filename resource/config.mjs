@@ -1,7 +1,9 @@
 export var ZOTERO_CONFIG = {
 	GUID: 'zotero@zotero.org',
 	ID: 'zotero', // used for db filename, etc.
-	CLIENT_NAME: 'Zotero',
+	CLIENT_NAME: 'EpiLib',
+	// Keep existing data directories discoverable across the display-name change.
+	DATA_DIRECTORY_NAME: 'Zotero',
 	DOMAIN_NAME: 'zotero.org',
 	PRODUCER: 'Digital Scholar',
 	PRODUCER_URL: 'https://digitalscholar.org',

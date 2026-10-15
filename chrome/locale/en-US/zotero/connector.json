@@ -205,10 +205,10 @@
 	},
 	
 	"integration_googleDocs_unlinkBeforeSaving_warning": {
-		"message": "This document contains active Zotero citations that will appear as zotero.org links in a downloaded copy."
+		"message": "This document contains active EpiLib citations that will appear as zotero.org links in a downloaded copy."
 	},
 	"integration_googleDocs_unlinkBeforeSaving_instructions": {
-		"message": "To generate a version suitable for sharing, select <b>Make a copy…</b> from the File menu, select <b>Unlink Citations</b> from the Zotero menu in the new document, and then download the unlinked version. Keep this original linked document in case you need to make further changes."
+		"message": "To generate a version suitable for sharing, select <b>Make a copy…</b> from the File menu, select <b>Unlink Citations</b> from the EpiLib menu in the new document, and then download the unlinked version. Keep this original linked document in case you need to make further changes."
 	},
 	"integration_googleDocs_unlinkBeforeSaving_downloadAnyway": {
 		"message": "Download Linked Version Anyway"

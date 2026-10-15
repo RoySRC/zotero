@@ -599,8 +599,8 @@ var ZoteroPane = new function () {
 									+ (ps.BUTTON_POS_1) * (ps.BUTTON_TITLE_CANCEL);
 				var index = ps.confirmEx(
 					null,
-					"Zotero Restore",
-					"The local Zotero database has been cleared."
+					"EpiLib Restore",
+					"The local EpiLib database has been cleared."
 						+ " "
 						+ "Would you like to restore from the Zotero server now?",
 					buttonFlags,
@@ -616,7 +616,7 @@ var ZoteroPane = new function () {
 							ps.alert(
 								null,
 								"Restore Completed",
-								"The local Zotero database has been successfully restored."
+								"The local EpiLib database has been successfully restored."
 							);
 						},
 						

@@ -6,7 +6,7 @@
 <!ENTITY hideOtherAppsCmdMac.label "Cacher les autres">
 <!ENTITY hideOtherAppsCmdMac.commandkey "H">
 <!ENTITY showAllAppsCmdMac.label "Tout afficher">
-<!ENTITY quitApplicationCmdMac.label "Quitter Zotero">
+<!ENTITY quitApplicationCmdMac.label "Quitter EpiLib">
 <!ENTITY quitApplicationCmdMac.key "Q">
 
 <!ENTITY fileMenu.label "Fichier">
@@ -61,7 +61,7 @@
 
 <!ENTITY toolsMenu.label "Outils">
 <!ENTITY toolsMenu.accesskey "O">
-<!ENTITY installConnector.label "Installer le Connecteur Zotero dans le navigateur…">
+<!ENTITY installConnector.label "Installer le Connecteur EpiLib dans le navigateur…">
 <!ENTITY installConnector.accesskey "I">
 <!ENTITY addons.label "Extensions">
 <!ENTITY developer.label "Développeur">
@@ -79,7 +79,7 @@
 <!ENTITY productHelp.accesskey "A">
 <!ENTITY helpTroubleshootingInfo.label "Aide en cas de problème">
 <!ENTITY helpTroubleshootingInfo.accesskey "i">
-<!ENTITY helpFeedbackPage.label "Forum Zotero">
+<!ENTITY helpFeedbackPage.label "Forum EpiLib">
 <!ENTITY helpFeedbackPage.accesskey "F">
 
 <!ENTITY helpReportErrors.label "Rapport d'erreurs…">

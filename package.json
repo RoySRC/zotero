@@ -2,7 +2,7 @@
   "name": "zotero",
   "private": true,
   "version": "7.0.0",
-  "description": "Zotero",
+  "description": "EpiLib research library",
   "main": "",
   "scripts": {
     "start": "node ./js-build/build.js && node ./js-build/watch.js",

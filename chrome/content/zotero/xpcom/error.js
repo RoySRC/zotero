@@ -39,7 +39,7 @@ Zotero.Error = function (message, error, data) {
 	}
 }
 Zotero.Error.prototype = Object.create(Error.prototype);
-Zotero.Error.prototype.name = "Zotero Error";
+Zotero.Error.prototype.name = "EpiLib Error";
 
 Zotero.Error.ERROR_UNKNOWN = 0;
 Zotero.Error.ERROR_MISSING_OBJECT = 1;

@@ -22,7 +22,7 @@
 	
 	<vbox id="aboutcontent" class="zotero-dialog">
 		<div xmlns="http://www.w3.org/1999/xhtml">
-			<img id="logo" src="chrome://zotero/skin/zotero.svg" alt="Zotero" />
+			<img id="logo" src="chrome://zotero/skin/zotero.svg" alt="EpiLib" />
 		</div>
 		<hbox>
 			<label id="version"/>
@@ -37,13 +37,16 @@
 		</script>
 		<vbox>
 			<div id="about-text" xmlns="http://www.w3.org/1999/xhtml">
+				<p id="fork-notice"></p>
 				<p id="created-by"></p>
 				<p id="third-party-software"></p>
 				<p id="get-involved"></p>
 				<script><![CDATA[
 					const { ZOTERO_CONFIG } = ChromeUtils.importESModule('resource://zotero/config.mjs');
+					document.getElementById('fork-notice').textContent = Zotero.getString('about.epilibFork');
 					
 					document.getElementById('changelog').href = ZOTERO_CONFIG.CHANGELOG_URL;
+					document.getElementById('changelog').value = Zotero.getString('about.upstreamChangelog');
 					
 					// Replace [links] in localized strings with spans with onclick handlers
 					//
@@ -52,7 +55,7 @@
 						Zotero.Utilities.htmlSpecialChars(
 							Zotero.getString(
 								'about.createdBy',
-								[Zotero.appName, `[${ZOTERO_CONFIG.PRODUCER}]`]
+								['Zotero', `[${ZOTERO_CONFIG.PRODUCER}]`]
 							),
 						)
 						.replace(
@@ -74,7 +77,7 @@
 						);
 					
 					document.getElementById('get-involved').innerHTML =
-						Zotero.Utilities.htmlSpecialChars(Zotero.getString('about.getInvolved'))
+						Zotero.Utilities.htmlSpecialChars(Zotero.getString('about.upstreamGetInvolved'))
 						.replace(
 							/\[([^\]]+)]/,
 							`<span data-href="${ZOTERO_CONFIG.GET_INVOLVED_URL}">$1</span>`

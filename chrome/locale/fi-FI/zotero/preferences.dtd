@@ -52,7 +52,7 @@
 <!ENTITY zotero.preferences.sync.lostPassword "Unohditko salasanan?">
 <!ENTITY zotero.preferences.sync.syncAutomatically "Synkronoi automaattisesti">
 <!ENTITY zotero.preferences.sync.syncFullTextContent "Synkronisoi kokotekstit">
-<!ENTITY zotero.preferences.sync.syncFullTextContent.desc "Zotero voi synkronisoida kirjastossasi olevien tiedostojen kokotekstisisällön zotero.orgiin ja linkattuihin laitteisiin, joten voi helposti hakea tietoja missä vain. Tiedostojen kokotekstisisältöä ei jaeta julkisesti.">
+<!ENTITY zotero.preferences.sync.syncFullTextContent.desc "EpiLib voi synkronisoida kirjastossasi olevien tiedostojen kokotekstisisällön zotero.orgiin ja linkattuihin laitteisiin, joten voi helposti hakea tietoja missä vain. Tiedostojen kokotekstisisältöä ei jaeta julkisesti.">
 <!ENTITY zotero.preferences.sync.about "Tietoa synkronoinnista">
 <!ENTITY zotero.preferences.sync.fileSyncing "Tiedostojen synkronointi">
 <!ENTITY zotero.preferences.sync.fileSyncing.url "Osoite:">
@@ -98,7 +98,7 @@
 
 <!ENTITY zotero.preferences.citationOptions.caption "Viittausasetukset">
 <!ENTITY zotero.preferences.export.citePaperJournalArticleURL "Liitä painettujen artikkeleiden internet-osoitteet viitteisiin">
-<!ENTITY zotero.preferences.export.citePaperJournalArticleURL.description "Kun tämä valinta on pois päältä, Zotero lisää internet-osoitteet tieteellisten lehtien, aikakauslehtien ja sanomalehtien artikkeleihin vain silloin kun niiden sivunumeroja ei ole määritelty.">
+<!ENTITY zotero.preferences.export.citePaperJournalArticleURL.description "Kun tämä valinta on pois päältä, EpiLib lisää internet-osoitteet tieteellisten lehtien, aikakauslehtien ja sanomalehtien artikkeleihin vain silloin kun niiden sivunumeroja ei ole määritelty.">
 
 <!ENTITY zotero.preferences.quickCopy.caption "Pikakopiointi">
 <!ENTITY zotero.preferences.quickCopy.itemFormat "Nimikkeen muoto:">
@@ -135,7 +135,7 @@
 <!ENTITY zotero.preferences.prefpane.proxies "Välityspalvelimet">
 
 <!ENTITY zotero.preferences.proxies.proxyOptions "Välityspalvelinten asetukset">
-<!ENTITY zotero.preferences.proxies.desc_before_link "Zotero välittää huomaamattomasti pyyntöjä tallennettujen välityspalvelinten kautta. Katso">
+<!ENTITY zotero.preferences.proxies.desc_before_link "EpiLib välittää huomaamattomasti pyyntöjä tallennettujen välityspalvelinten kautta. Katso">
 <!ENTITY zotero.preferences.proxies.desc_link "välityspalvelinten ohjeesta">
 <!ENTITY zotero.preferences.proxies.desc_after_link "lisätietoja.">
 <!ENTITY zotero.preferences.proxies.transparent "Käytä välityspalvelinta uudelleenohjaukseen">
@@ -181,7 +181,7 @@
 <!ENTITY zotero.preferences.dataDir.migrate "Siirrä uuteen vakiosijaintiin...">
 
 <!ENTITY zotero.preferences.attachmentBaseDir.caption "Linkattujen liitteiden juurikansio">
-<!ENTITY zotero.preferences.attachmentBaseDir.message "Zotero käyttää suhteellisia polkuja viitatakseen tiedostoliitteisiin juurikansiossa, joten voit käyttää tiedostoja eri tietokoneilla, kunhan tiedostorakenne juurikansion sisällä pysyy samana.">
+<!ENTITY zotero.preferences.attachmentBaseDir.message "EpiLib käyttää suhteellisia polkuja viitatakseen tiedostoliitteisiin juurikansiossa, joten voit käyttää tiedostoja eri tietokoneilla, kunhan tiedostorakenne juurikansion sisällä pysyy samana.">
 <!ENTITY zotero.preferences.attachmentBaseDir.basePath "Juurikansio:">
 <!ENTITY zotero.preferences.attachmentBaseDir.selectBasePath "Valitse...">
 <!ENTITY zotero.preferences.attachmentBaseDir.resetBasePath "Palauta absoluuttiset polut...">

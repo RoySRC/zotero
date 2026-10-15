@@ -53,6 +53,7 @@ async function getReader(signatures) {
 		signatures['reader'] = { hash };
 	}
 	
+	await require('./branding')(path.join(__dirname, '..', 'build', 'resource', 'reader'));
 	const t2 = Date.now();
 
 	return {

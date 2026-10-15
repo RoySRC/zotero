@@ -168,13 +168,13 @@
     "message": "Umožnit ukládání do Online knihovny"
   },
   "reports_report_submitted": {
-    "message": "Vaše chybové hlášení bylo odesláno.\n\nID hlášení: $1\n\nNapište prosím zprávu do fóra Zotero s ID tohoto hlášení, popisem problému a případnými kroky potřebnými k jeho reprodukci.\n\nChybová hlášení nejsou přezkoumávána, pokud na ně není odkazováno ve fóru."
+    "message": "Vaše chybové hlášení bylo odesláno.\n\nID hlášení: $1\n\nNapište prosím zprávu do fóra EpiLib s ID tohoto hlášení, popisem problému a případnými kroky potřebnými k jeho reprodukci.\n\nChybová hlášení nejsou přezkoumávána, pokud na ně není odkazováno ve fóru."
   },
   "reports_debug_output_submitted": {
     "message": "Váš ladící výstup byl odeslán.\n\nID ladícího výstupu je $1."
   },
   "reports_submission_failed": {
-    "message": "Při odesílání zprávy došlo k chybě.\n\n$1\n\nZkontrolujte prosím své internetové připojení. Pokud problém přetrvává, napište zprávu do fóra Zotero."
+    "message": "Při odesílání zprávy došlo k chybě.\n\n$1\n\nZkontrolujte prosím své internetové připojení. Pokud problém přetrvává, napište zprávu do fóra EpiLib."
   },
   "integration_error_clientUpgrade": {
     "message": "Citování na webu vyžaduje $1 či novější."
@@ -183,10 +183,10 @@
     "message": "$1 nemohl komunikovat s desktopovou aplikací $2. Při používání webových citací  musí být   $2 otevřen."
   },
   "integration_googleDocs_unlinkBeforeSaving_warning": {
-    "message": "Tento dokument obsahuje aktivní citaci Zotero, která se objeví ve stažené kopii jako odkaz zotero.org."
+    "message": "Tento dokument obsahuje aktivní citaci EpiLib, která se objeví ve stažené kopii jako odkaz zotero.org."
   },
   "integration_googleDocs_unlinkBeforeSaving_instructions": {
-    "message": "Pro generování verze vhodné pro sdílení zvolte <b> Vytvořit kopii... </b> z menu Soubor, zvolte <b> Odpojit citace </b> ze Zotero menu v novém dokumentu a poté stáhněte verzi s odpojenými citacemi. Originální dokument s propojenými citacemi uchovejte pro případ, že byste v budoucnu potřebovali provést další změny."
+    "message": "Pro generování verze vhodné pro sdílení zvolte <b> Vytvořit kopii... </b> z menu Soubor, zvolte <b> Odpojit citace </b> ze EpiLib menu v novém dokumentu a poté stáhněte verzi s odpojenými citacemi. Originální dokument s propojenými citacemi uchovejte pro případ, že byste v budoucnu potřebovali provést další změny."
   },
   "integration_googleDocs_unlinkBeforeSaving_downloadAnyway": {
     "message": "Přesto stáhnout propojenou verzi"

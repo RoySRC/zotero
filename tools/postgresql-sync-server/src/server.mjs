@@ -2151,5 +2151,5 @@ app.use((_req, res) => {
 await ensureRuntimeSchema();
 
 app.listen(PORT, () => {
-	console.log(`Zotero PostgreSQL sync server listening on port ${PORT}`);
+	console.log(`EpiLib PostgreSQL sync server listening on port ${PORT}`);
 });
