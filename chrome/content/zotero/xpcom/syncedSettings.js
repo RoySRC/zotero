@@ -121,7 +121,7 @@ Zotero.SyncedSettings = (function () {
 				tagColors = tagColors.filter((color) => {
 					if (typeof color != 'object' || typeof color.name != 'string' || typeof color.color != 'string') {
 						Zotero.logError("Removing invalid colored tag: " + JSON.stringify(color));
-						tagsFixed = true;
+						fixed = true;
 						return false;
 					}
 					return true;
@@ -216,7 +216,7 @@ Zotero.SyncedSettings = (function () {
 		},
 		
 		set: async function (libraryID, setting, value, version = 0, synced) {
-			if (typeof value == undefined) {
+			if (typeof value == 'undefined') {
 				throw new Error("Value not provided");
 			}
 			
