@@ -147,6 +147,9 @@ function modify_omni {
 	replace_line 'MOZ_DATA_REPORTING:' 'MOZ_DATA_REPORTING: false \&\&' modules/AppConstants.sys.mjs
 	replace_line 'MOZ_TELEMETRY_REPORTING:' 'MOZ_TELEMETRY_REPORTING: false \&\&' modules/AppConstants.sys.mjs
 	replace_line 'MOZ_CRASHREPORTER:' 'MOZ_CRASHREPORTER: false \&\&' modules/AppConstants.sys.mjs
+	# Places modules are removed below. Diagnostics must not try to import
+	# PlacesDBUtils for browser history/bookmarks that this app does not ship.
+	replace_line 'MOZ_PLACES:' 'MOZ_PLACES: false \&\&' modules/AppConstants.sys.mjs
 	replace_line 'MOZ_UPDATE_CHANNEL:.+' 'MOZ_UPDATE_CHANNEL: "none",' modules/AppConstants.sys.mjs
 	replace_line '"https:\/\/[^\/]+mozilla.com.+"' '""' modules/AppConstants.sys.mjs
 	

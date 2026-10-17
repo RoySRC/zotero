@@ -36,6 +36,10 @@ pref("extensions.zotero.recursiveCollections", false);
 pref("extensions.zotero.autoRecognizeFiles", true);
 // Preserve the existing provider until a user explicitly selects their EpiLib server.
 pref("extensions.zotero.recognize.engine", "zotero");
+// An empty override follows the authenticated recognition gateway in Account Settings.
+pref("extensions.zotero.recognize.epilib.url", "");
+pref("extensions.zotero.recognize.grobid.enabled", false);
+pref("extensions.zotero.recognize.grobid.url", "http://127.0.0.1:8070/");
 pref("extensions.zotero.autoRenameFiles", true);
 pref("extensions.zotero.autoRenameFiles.linked", false);
 pref("extensions.zotero.autoRenameFiles.fileTypes", "application/pdf,application/epub+zip");

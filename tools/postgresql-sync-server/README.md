@@ -40,10 +40,13 @@ The server listens on `http://localhost:23129/` by default.
 
 ## PDF recognition
 
-The same HTTP service also hosts an authenticated, identifier-first PDF recognizer.
+The HTTP service authenticates and proxies requests to a separate recognition container.
 Select **EpiLib** under **Settings > General > PDF Recognition** in the desktop
-client, then use **Verify Engine**. The initial engine identifies DOI, arXiv, and
-valid ISBN references; it does not yet provide OCR or title-only matching.
+client, then use **Verify Engine**. Configure `RECOGNITION_SERVICE_URL` and
+`RECOGNITION_SERVICE_KEY_FILE` on this server; see the deployment instructions below.
+The worker resolves DOI/arXiv/ISBN metadata, supports conservative title matching,
+and returns complete records. Local GROBID is an optional desktop fallback, not
+part of the sync server or its container.
 
 See [RECOGNITION.md](RECOGNITION.md) for the request contract, beginner-oriented
 code walkthrough, privacy boundaries, tests, deployment, and extension guide.

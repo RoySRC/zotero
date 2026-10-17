@@ -209,6 +209,32 @@ describe("Zotero.Sync.Runner", function () {
 		Zotero.HTTP.mock = null;
 	})
 	
+	describe("#sync() option lifetime", function () {
+		it("copies queued options before their caller sandbox is destroyed", async function () {
+			let resolveFirst;
+			let firstStarted = Zotero.Promise.defer();
+			stub = sinon.stub(runner, '_sync').callsFake(async options => {
+				if (options.background) {
+					firstStarted.resolve();
+					await new Promise(resolve => { resolveFirst = resolve; });
+				}
+				return { background: options.background, libraries: Array.from(options.libraries || []) };
+			});
+			let first = runner.sync({ background: true });
+			await firstStarted.promise;
+			let scope = new Cu.Sandbox(window, {
+				sandboxPrototype: window,
+				sameZoneAs: window
+			});
+			let options = Cu.evalInSandbox('({ background: false, libraries: [1, 2] })', scope);
+			let queued = runner.sync(options);
+			Cu.nukeSandbox(scope);
+			resolveFirst();
+			await first;
+			assert.deepEqual(await queued, { background: false, libraries: [1, 2] });
+		});
+	});
+
 	describe("#checkAccess()", function () {
 		it("should check key access", async function () {
 			setResponse('keyInfo.fullAccess');

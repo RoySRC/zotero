@@ -1,6 +1,11 @@
 "use strict";
 
 describe("Zotero", function() {
+	it("does not advertise the removed Places browser-history modules to diagnostics", function () {
+		let { AppConstants } = ChromeUtils.importESModule('resource://gre/modules/AppConstants.sys.mjs');
+		assert.isFalse(AppConstants.MOZ_PLACES);
+	});
+
 	describe("#restoreZoteroPaneProgressMeter()", function () {
 		// A token captures the current display state, so taking one and immediately
 		// restoring it reads the state without changing it

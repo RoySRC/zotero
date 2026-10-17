@@ -1,0 +1,23 @@
+services:
+  recognition:
+    build: .
+    restart: unless-stopped
+    read_only: true
+    user: "${RECOGNITION_UID:-1000}:${RECOGNITION_GID:-1000}"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    ports:
+      - "127.0.0.1:23130:8080"
+    environment:
+      RECOGNITION_SERVICE_KEY_FILE: /run/secrets/recognition_key
+      PROVIDER_CONTACT: ${PROVIDER_CONTACT:-}
+      LOOKUP_MODE: ${LOOKUP_MODE:-online}
+      DATABASE_URL: ${RECOGNITION_DATABASE_URL:-}
+    secrets:
+      - recognition_key
+secrets:
+  recognition_key:
+    file: ${RECOGNITION_SERVICE_KEY_FILE:?Set a path to your service-key file}

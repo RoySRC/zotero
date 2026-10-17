@@ -63,6 +63,8 @@ test('bulk sync object updates', {
 			DATABASE_URL: databaseURL.href,
 			PORT: `${port}`,
 			ZOTERO_SYNC_API_KEY: '',
+			RECOGNITION_SERVICE_URL: '',
+			RECOGNITION_SERVICE_KEY_FILE: '',
 			WEBDAV_GROUP_PASSWD_PATH: '',
 			WEBDAV_GROUP_PASSWD_SSH_HOST: ''
 		},
@@ -91,15 +93,14 @@ test('bulk sync object updates', {
 		assert.equal((await fetch(url + 'health')).status, 403);
 		assert.equal((await fetch(url + 'health', { headers: { 'Zotero-API-Key': 'invalid' } })).status, 403);
 		let health = await fetch(url + 'health', { headers: { 'Zotero-API-Key': token } });
-		assert.equal(health.status, 200);
-		assert.equal((await health.json()).engine, 'epilib');
+		assert.equal(health.status, 503);
+		assert.equal((await health.json()).error, 'recognition_service_not_configured');
 		let result = await fetch(url + 'recognize', {
 			method: 'POST',
 			headers: { 'Zotero-API-Key': token, 'Content-Type': 'application/json' },
 			body: JSON.stringify({ metadata: { DOI: '10.1234/test' }, totalPages: 1, pages: [] })
 		});
-		assert.equal(result.status, 200);
-		assert.deepEqual(await result.json(), { doi: '10.1234/test' });
+		assert.equal(result.status, 503);
 	});
 	async function write(target, data, method = 'POST') {
 		const response = await fetch(`${baseURL}/${target}`, {
@@ -227,5 +228,36 @@ test('bulk sync object updates', {
 		item = await save('items', { key: item.key, version: item.version, title: 'Renamed book' });
 		assert.equal(item.itemType, 'book');
 		assert.equal(item.title, 'Renamed book');
+	});
+	await t.test('recognition parenting removes inherited child collections but preserves parent membership', async () => {
+		let parent = await save('items', { key: 'PAPER001', itemType: 'preprint', title: 'Paper', collections: ['COLLECT1'] });
+		let child = await save('items', { key: 'PDF00001', itemType: 'attachment', title: 'PDF',
+			linkMode: 'imported_file', filename: 'paper.pdf', collections: ['COLLECT1'] });
+		child = await save('items', { key: child.key, version: child.version, parentItem: parent.key });
+		assert.equal(child.parentItem, parent.key);
+		assert.equal(child.filename, 'paper.pdf');
+		assert.equal(child.collections, undefined);
+		assert.deepEqual((await read('items', parent.key)).collections, ['COLLECT1']);
+		let stored = await pool.query("SELECT data FROM objects WHERE object_type='item' AND key='PDF00001'");
+		assert.equal(stored.rows[0].data.collections, undefined);
+		// Undo recognition must also work: detach and explicitly restore membership.
+		child = await save('items', { key: child.key, version: child.version, parentItem: false,
+			collections: ['COLLECT1'] }, 'PATCH');
+		assert.equal(child.parentItem, undefined);
+		assert.deepEqual(child.collections, ['COLLECT1']);
+		let top = await fetch(baseURL + '/items/top?format=keys', { headers: { 'Zotero-API-Key': token } });
+		assert.ok((await top.text()).split('\n').includes(child.key));
+	});
+	await t.test('legacy invalid child collections are removed from reads and conflict echoes', async () => {
+		let child = await save('items', { key: 'NOTE0001', itemType: 'note', note: 'Note', parentItem: 'PAPER001' });
+		await pool.query("UPDATE objects SET data=data || $1::jsonb WHERE object_type='item' AND key=$2",
+			[{ collections: ['COLLECT1'] }, child.key]);
+		assert.equal((await read('items', child.key)).collections, undefined);
+		let conflict = await write('items', { key: child.key, version: child.version - 1, note: 'Stale' });
+		assert.equal(conflict.failed[0].code, 412);
+		assert.equal(conflict.failed[0].data.collections, undefined);
+		child = await save('items', { key: child.key, version: child.version, note: 'Updated' });
+		assert.equal(child.collections, undefined);
+		assert.equal(child.parentItem, 'PAPER001');
 	});
 });

@@ -37,6 +37,8 @@ Zotero.RecognizeDocument = new function () {
 	let _queue = [];
 	let _queueProcessing = false;
 	let _processingItemID = null;
+	let _localRequest = null;
+	let _cancelRevision = 0;
 	
 	let _progressQueue = Zotero.ProgressQueues.create({
 		id: 'recognize',
@@ -49,6 +51,8 @@ Zotero.RecognizeDocument = new function () {
 	
 	_progressQueue.addListener('cancel', function () {
 		_queue = [];
+		_cancelRevision++;
+		_localRequest?.abort();
 	});
 	
 	this.recognizeStub = null;
@@ -225,7 +229,7 @@ Zotero.RecognizeDocument = new function () {
 	
 	/**
 	 * Send user-requested feedback only to the service that recognized this item
-	 * in this session. EpiLib v1 intentionally has no document-feedback storage.
+	 * in this session. EpiLib intentionally has no document-feedback storage.
 	 * @param {Zotero.Item} item - Recognized parent item, not the PDF attachment.
 	 * @param {string} description - User-supplied explanation of the incorrect match.
 	 * @returns {Promise<void>} Resolves after the original service accepts feedback.
@@ -372,36 +376,90 @@ Zotero.RecognizeDocument = new function () {
 	}
 	
 	/**
+	 * Validate a recognition API base URL, without rewriting the saved preference.
+	 * Credentials belong in authentication headers, never in URLs or query strings.
+	 * A trailing slash ensures that appending "health" or "recognize" keeps the
+	 * configured path instead of accidentally merging it with the operation name.
+	 * @param {string} value - Absolute HTTP(S) base URL.
+	 * @returns {string} Canonical URL with a trailing slash.
+	 */
+	function _normalizeRecognitionURL(value) {
+		try {
+			let url = new URL(value.trim());
+			if (!['https:', 'http:'].includes(url.protocol)
+					|| url.username || url.password || url.search || url.hash) {
+				throw new Error('Invalid recognition URL');
+			}
+			if (!url.pathname.endsWith('/')) url.pathname += '/';
+			return url.href;
+		}
+		catch (_e) {
+			throw new Error(Zotero.getString('recognition-url-invalid'));
+		}
+	}
+
+	/**
+	 * Return the account-authenticated gateway used when no override is saved.
+	 * This is also the settings field's placeholder, so its fallback stays visible
+	 * without storing a duplicate URL that would stop following Account Settings.
+	 * @returns {string} Gateway base URL, not the private worker's address.
+	 */
+	this.getDefaultRecognitionURL = function () {
+		let server;
+		try {
+			server = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
+		}
+		catch (_e) {
+			throw new Error(Zotero.getString('recognition-server-required'));
+		}
+		if (!server) throw new Error(Zotero.getString('recognition-server-required'));
+		return _normalizeRecognitionURL(server + 'recognizer/');
+	};
+
+	/**
+	 * Resolve the EpiLib override independently of the selected engine. Requests
+	 * use this again after asynchronous work to detect destination/auth changes.
+	 * Only the exact account gateway may receive the account token. A different
+	 * path, port, scheme, or hostname is a separate service and is anonymous; we
+	 * must not grant it sync-account access merely because its URL was typed here.
+	 * @returns {{baseURL: string, accountURL: string|null}} No credentials retained.
+	 */
+	function _getEpiLibConfiguration() {
+		let override = (Zotero.Prefs.get('recognize.epilib.url') || '').trim();
+		let accountURL = null;
+		try {
+			accountURL = Zotero.RecognizeDocument.getDefaultRecognitionURL();
+		}
+		catch (error) {
+			if (!override) throw error;
+		}
+		let baseURL = override ? _normalizeRecognitionURL(override) : accountURL;
+		return { baseURL, accountURL: baseURL == accountURL ? accountURL : null };
+	}
+
+	/**
 	 * Snapshot the selected engine and destination before starting asynchronous PDF
 	 * work. Tokens are deliberately NOT stored here or in the feedback-origin map.
 	 * Legacy URL overrides apply only to the explicitly selected Zotero service.
-	 * @returns {{engine:string, baseURL:string}} Immutable routing configuration.
+	 * @returns {object} Immutable engine/destination, local fallback preferences,
+	 * and cancellation revision. No password or API token is retained.
 	 */
 	this.getRecognitionConfiguration = function () {
 		let engine = Zotero.Prefs.get('recognize.engine');
 		let baseURL;
+		let accountURL = null;
 		if (engine == 'zotero') {
-			baseURL = _getBaseURL();
+			baseURL = _normalizeRecognitionURL(_getBaseURL());
 		}
 		else if (engine == 'epilib') {
-			try {
-				let server = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
-				if (!server) throw new Error('No server configured');
-				baseURL = server + 'recognizer/';
-			}
-			catch (_e) {
-				throw new Error(Zotero.getString('recognition-server-required'));
-			}
+			({ baseURL, accountURL } = _getEpiLibConfiguration());
 		}
 		else {
 			throw new Error(Zotero.getString('recognition-engine-invalid'));
 		}
-		let url = new URL(baseURL);
-		if (!['https:', 'http:'].includes(url.protocol)
-				|| url.username || url.password || url.search || url.hash) {
-			throw new Error(Zotero.getString('recognition-url-invalid'));
-		}
-		return Object.freeze({ engine, baseURL: url.href });
+		return Object.freeze({ engine, baseURL, accountURL,
+			grobidEnabled: engine == 'epilib' && Zotero.Prefs.get('recognize.grobid.enabled'),
+			grobidURL: Zotero.Prefs.get('recognize.grobid.url'), cancelRevision: _cancelRevision });
 	};
 
 	/**
@@ -415,20 +473,31 @@ Zotero.RecognizeDocument = new function () {
 	 * @returns {Promise<XMLHttpRequest>} Successful response, without JSON parsing.
 	 */
 	async function _request(configuration, endpoint, body, successCodes = [200]) {
+		if (endpoint == 'recognize' && configuration.cancelRevision != _cancelRevision) {
+			throw new Error(Zotero.getString('recognition-cancelled'));
+		}
 		let headers = { 'Content-Type': 'application/json' };
 		if (configuration.engine == 'epilib') {
-			let baseURL = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
-			if (!baseURL || configuration.baseURL != new URL(baseURL + 'recognizer/').href) {
-				throw new Error(Zotero.getString('recognition-server-changed'));
+			// Compare both destination and authentication scope: an old gateway URL
+			// can remain in the override after the user switches metadata accounts.
+			let assertCurrentServer = () => {
+				let current = _getEpiLibConfiguration();
+				if (configuration.baseURL != current.baseURL || configuration.accountURL != current.accountURL) {
+					throw new Error(Zotero.getString('recognition-server-changed'));
+				}
+			};
+			assertCurrentServer();
+			if (configuration.accountURL) {
+				let key = await Zotero.Sync.Metadata.getPostgreSQLAPIKey();
+				assertCurrentServer();
+				if (!key) throw new Error(Zotero.getString('recognition-login-required'));
+				headers['Zotero-API-Key'] = key;
 			}
-			let key = await Zotero.Sync.Metadata.getPostgreSQLAPIKey();
-			if (baseURL != Zotero.Sync.Metadata.getPostgreSQLBaseURL()) {
-				throw new Error(Zotero.getString('recognition-server-changed'));
-			}
-			if (!key) throw new Error(Zotero.getString('recognition-login-required'));
-			headers['Zotero-API-Key'] = key;
 		}
 		let response;
+		if (endpoint == 'recognize' && configuration.cancelRevision != _cancelRevision) {
+			throw new Error(Zotero.getString('recognition-cancelled'));
+		}
 		try {
 			response = await Zotero.HTTP.request(body === undefined ? 'GET' : 'POST',
 				configuration.baseURL + endpoint, {
@@ -448,7 +517,8 @@ Zotero.RecognizeDocument = new function () {
 		catch (e) {
 			let status = e.status || response?.status;
 			if (status == 401 || status == 403) {
-				throw new Error(Zotero.getString('recognition-access-denied'));
+				throw new Error(Zotero.getString(configuration.engine == 'epilib' && !configuration.accountURL
+					? 'recognition-custom-access-denied' : 'recognition-access-denied'));
 			}
 			throw new Error(Zotero.getString('recognition-request-failed'));
 		}
@@ -476,6 +546,19 @@ Zotero.RecognizeDocument = new function () {
 	this.queryPDFMetadata = async function (json, configuration = this.getRecognitionConfiguration()) {
 		let result = _parseResponse(await _request(configuration, 'recognize', json));
 		if (result === null) return null;
+		if (configuration.engine == 'epilib' && result?.version == 2 && result.engine == 'epilib') {
+			if (result.status == 'no_match') return result;
+			if (result.status == 'matched') {
+				result.item = _validateResolvedItem(result.item);
+				return result;
+			}
+			if (result.status == 'needs_review' && Array.isArray(result.candidates)
+					&& result.candidates.length > 0 && result.candidates.length <= 5) {
+				for (let candidate of result.candidates) candidate.item = _validateResolvedItem(candidate.item);
+				return result;
+			}
+			throw new Error(Zotero.getString('recognition-response-invalid'));
+		}
 		let fields = ['doi', 'arxiv', 'isbn', 'title'];
 		if (!result || typeof result != 'object' || Array.isArray(result)
 				|| !fields.some(key => typeof result[key] == 'string' && result[key].trim())
@@ -494,10 +577,225 @@ Zotero.RecognizeDocument = new function () {
 		let configuration = this.getRecognitionConfiguration();
 		if (configuration.engine != 'epilib') throw new Error(Zotero.getString('recognition-engine-invalid'));
 		let result = _parseResponse(await _request(configuration, 'health'));
-		if (result?.engine != 'epilib' || result.version != 1 || result.protocol != 'zotero-recognizer-json') {
+		if (result?.engine != 'epilib' || !((result.version == 1 && result.protocol == 'zotero-recognizer-json')
+				|| (result.version == 2 && result.protocol == 'epilib-recognition-v2'))) {
 			throw new Error(Zotero.getString('recognition-response-invalid'));
 		}
 		return result;
+	};
+
+	/**
+	 * Accept only bibliographic fields from the worker, never record identities,
+	 * children, library assignments, HTML notes, or sync state. Unknown fields are
+	 * omitted and fields invalid for the selected item type cannot reach fromJSON.
+	 */
+	function _validateResolvedItem(record) {
+		let types = ['journalArticle', 'book', 'bookSection', 'conferencePaper', 'thesis', 'report', 'preprint'];
+		if (!record || !types.includes(record.itemType) || typeof record.title != 'string'
+				|| !record.title.trim() || record.title.length > 4000 || !Array.isArray(record.creators)
+				|| record.creators.length > 200) throw new Error(Zotero.getString('recognition-response-invalid'));
+		let clean = { itemType: record.itemType, title: record.title, creators: [] };
+		for (let creator of record.creators) {
+			if (!creator || typeof creator != 'object'
+					|| !(typeof creator.lastName == 'string' || typeof creator.name == 'string')) {
+				throw new Error(Zotero.getString('recognition-response-invalid'));
+			}
+			clean.creators.push(typeof creator.name == 'string'
+				? { creatorType: 'author', name: creator.name.slice(0, 4000) }
+				: { creatorType: 'author', firstName: typeof creator.firstName == 'string' ? creator.firstName.slice(0, 4000) : '',
+					lastName: creator.lastName.slice(0, 4000) });
+		}
+		let typeID = Zotero.ItemTypes.getID(record.itemType);
+		for (let field of ['DOI', 'ISBN', 'ISSN', 'date', 'publicationTitle', 'volume', 'issue', 'pages',
+			'bookTitle', 'proceedingsTitle', 'publisher', 'url', 'libraryCatalog', 'archiveID', 'repository',
+			'abstractNote', 'language', 'rights', 'university', 'institution']) {
+			// Abstracts are bibliographic text, not executable notes. Give them a
+			// larger bounded allowance while keeping all fields type-checked.
+			let limit = field == 'abstractNote' ? 20000 : 4000;
+			if (typeof record[field] != 'string' || record[field].length > limit) continue;
+			if (field == 'url' && !/^https?:\/\//i.test(record[field])) continue;
+			let id = Zotero.ItemFields.getID(field);
+			if (id && Zotero.ItemFields.isValidForType(id, typeID)) clean[field] = record[field];
+			else if (field == 'DOI' && record.DOI) clean.extra = `DOI: ${record.DOI.replace(/[\r\n]/g, '')}`;
+		}
+		// A published paper has no archiveID field. Preserve only a validated
+		// alternate arXiv identifier in Extra, never arbitrary provider Extra text.
+		let arxiv = record.alternateIdentifiers?.arxiv;
+		if (typeof arxiv == 'string' && /^(?:\d{4}\.\d{4,5}|[a-z.-]+\/\d{7})$/i.test(arxiv)) {
+			clean.extra = [clean.extra, `arXiv: ${arxiv}`].filter(Boolean).join('\n');
+		}
+		// Import subject labels only. Do not trust provider-supplied tag objects,
+		// identifiers or manual-tag flags; recognized subjects are automatic tags.
+		if (Array.isArray(record.tags)) {
+			clean.tags = [...new Set(record.tags.filter(tag => typeof tag?.tag == 'string'
+				&& tag.tag.trim() && tag.tag.length <= 255).map(tag => tag.tag.trim()))]
+				.slice(0, 100).map(tag => ({ tag, type: 1 }));
+		}
+		return clean;
+	}
+
+	/**
+	 * Require an explicit choice for ambiguous candidates. The existing native
+	 * prompt provides keyboard navigation and safe text rendering; no provider
+	 * HTML is rendered. Cancel or exhausting candidates creates no parent record.
+	 */
+	this.chooseRecognitionCandidate = function (candidates) {
+		for (let candidate of candidates) {
+			let item = candidate.item;
+			let details = [item.title, Zotero.ItemTypes.getLocalizedString(item.itemType),
+				item.creators.map(c => c.name || [c.firstName, c.lastName].filter(Boolean).join(' ')).join(', '),
+				item.proceedingsTitle || item.publicationTitle, item.date,
+				item.DOI || item.ISBN || item.archiveID, item.libraryCatalog].filter(Boolean).join('\n\n');
+			let prompt = Services.prompt;
+			let choice = prompt.confirmEx(Zotero.getMainWindow(), Zotero.getString('recognition-review-title'), details,
+				prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_IS_STRING
+				| prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_IS_STRING
+				| prompt.BUTTON_POS_2 * prompt.BUTTON_TITLE_IS_STRING
+				| prompt.BUTTON_POS_2_DEFAULT,
+				Zotero.getString('recognition-review-use'), Zotero.getString('recognition-review-next'),
+				Zotero.getString('recognition-review-cancel'), null, {});
+			if (choice == 0) return item;
+			if (choice != 1) break;
+		}
+		return null;
+	};
+
+	/** Limit in-place refresh to editable preprints; ordinary recognition stays unchanged. */
+	this.canRefreshPublishedMetadata = function (item) {
+		return Zotero.Prefs.get('recognize.engine') == 'epilib'
+			&& item?.itemTypeID == Zotero.ItemTypes.getID('preprint')
+			&& !item.deleted && !item.isFeedItem && item.isEditable();
+	};
+
+	/**
+	 * Resolve an existing preprint using its bibliographic identifiers/byline, then
+	 * ask before changing its metadata. No temporary parent is created, no PDF is
+	 * uploaded, and attachments, annotations, collections and tags are untouched.
+	 * Compare a snapshot again inside the transaction to avoid overwriting an edit
+	 * or sync that completed while the network request/confirmation was pending.
+	 * @returns {Promise<boolean>} Whether a confirmed publication replaced metadata.
+	 */
+	this.refreshPublishedMetadata = async function (item) {
+		if (!this.canRefreshPublishedMetadata(item)) throw new Error(Zotero.getString('recognition-refresh-unavailable'));
+		let before = JSON.stringify(item.toJSON());
+		let configuration = this.getRecognitionConfiguration();
+		let metadata = { Title: item.getField('title'), Author: item.getCreators()
+			.map(c => [c.firstName, c.lastName].filter(Boolean).join(' ')).join('; ') };
+		let arxiv = item.getField('archiveID').replace(/^arxiv:\s*/i, '').replace(/v\d+$/i, '');
+		if (/^(?:\d{4}\.\d{4,5}|[a-z.-]+\/\d{7})$/i.test(arxiv)) metadata.arxiv = arxiv;
+		else if (item.getField('DOI')) metadata.DOI = item.getField('DOI');
+		let result = await this.queryPDFMetadata({ metadata, totalPages: 0, pages: [] }, configuration);
+		let candidates = result?.status == 'matched' ? [{ item: result.item }] : result?.candidates || [];
+		candidates = candidates.filter(candidate => ['conferencePaper', 'journalArticle'].includes(candidate.item.itemType));
+		if (!candidates.length) throw new Error(Zotero.getString('recognition-refresh-no-publication'));
+		let record = this.chooseRecognitionCandidate(candidates);
+		if (!record) return false;
+		if (configuration.cancelRevision != _cancelRevision) throw new Error(Zotero.getString('recognition-cancelled'));
+		await Zotero.DB.executeTransaction(async () => {
+			if (!this.canRefreshPublishedMetadata(item) || JSON.stringify(item.toJSON()) != before) {
+				throw new Error(Zotero.getString('recognition-refresh-changed'));
+			}
+			// Preserve user Extra and repository identifiers. Do not carry a preprint
+			// DOI into the published DOI field when the publication has no DOI.
+			let extra = [item.getField('extra'), record.extra];
+			if (arxiv && !record.extra?.includes(`arXiv: ${arxiv}`)) extra.push(`arXiv: ${arxiv}`);
+			let oldDOI = item.getField('DOI');
+			if (oldDOI && oldDOI != record.DOI) extra.push(`Preprint DOI: ${oldDOI}`);
+			item.setType(Zotero.ItemTypes.getID(record.itemType));
+			item.setField('DOI', record.DOI || '');
+			for (let [field, value] of Object.entries(record)) {
+				if (['itemType', 'creators', 'tags', 'extra'].includes(field) || !value) continue;
+				item.setField(field, value);
+			}
+			item.setCreators(record.creators);
+			item.setField('extra', [...new Set(extra.filter(Boolean))].join('\n'));
+			await item.save();
+		});
+		return true;
+	};
+
+	/** Validate before opening a file: local extraction must never become remote upload. */
+	this.getLocalGROBIDURL = function (value = Zotero.Prefs.get('recognize.grobid.url')) {
+		let url;
+		try { url = new URL(value); }
+		catch (_error) { throw new Error(Zotero.getString('recognition-grobid-url-invalid')); }
+		if (!['http:', 'https:'].includes(url.protocol) || !['127.0.0.1', '[::1]'].includes(url.hostname)
+				|| url.username || url.password || url.search || url.hash) {
+			throw new Error(Zotero.getString('recognition-grobid-url-invalid'));
+		}
+		if (!url.pathname.endsWith('/')) url.pathname += '/';
+		return url.href;
+	};
+
+	/** Check only liveness; this never starts/installs GROBID or submits a document. */
+	this.verifyLocalGROBID = async function () {
+		let url = this.getLocalGROBIDURL();
+		try {
+			let response = await Zotero.HTTP.request('GET', url + 'api/isalive', {
+				anon: true, followRedirects: false, timeout: 5000, errorDelayMax: 0, logBodyLength: 0
+			});
+			if (response.status != 200 || response.responseText.trim() != 'true') throw new Error();
+		}
+		catch (_error) { throw new Error(Zotero.getString('recognition-grobid-failed')); }
+	};
+
+	/**
+	 * Convert TEI header output to a minimal second lookup request. GROBID performs
+	 * extraction only (consolidation is disabled below), while the EpiLib worker
+	 * resolves these hints through the same audited provider/matching path.
+	 */
+	this.parseGROBIDHeader = function (xml) {
+		if (typeof xml != 'string' || xml.length > 1024 * 1024 || /<!DOCTYPE|<!ENTITY/i.test(xml)) {
+			throw new Error(Zotero.getString('recognition-grobid-failed'));
+		}
+		let doc = new DOMParser().parseFromString(xml, 'application/xml');
+		let ns = 'http://www.tei-c.org/ns/1.0';
+		let header = doc.getElementsByTagNameNS(ns, 'teiHeader')[0];
+		if (!header || doc.getElementsByTagName('parsererror').length) throw new Error(Zotero.getString('recognition-grobid-failed'));
+		let analytic = header.getElementsByTagNameNS(ns, 'analytic')[0];
+		let title = (analytic || header).getElementsByTagNameNS(ns, 'title')[0]?.textContent.trim() || '';
+		let authors = [...(analytic || header).getElementsByTagNameNS(ns, 'persName')].map(node => {
+			let parts = [...node.getElementsByTagNameNS(ns, 'forename'), ...node.getElementsByTagNameNS(ns, 'surname')];
+			return parts.length ? parts.map(part => part.textContent.trim()).join(' ') : node.textContent.trim();
+		}).join(' ');
+		let date = header.getElementsByTagNameNS(ns, 'date')[0];
+		let year = (date?.getAttribute('when') || date?.textContent || '').match(/\b\d{4}\b/)?.[0] || '';
+		let dois = [...header.getElementsByTagNameNS(ns, 'idno')]
+			.filter(node => node.getAttribute('type')?.toLowerCase() == 'doi').map(node => node.textContent.trim());
+		if (!title && !dois.length) throw new Error(Zotero.getString('recognition-grobid-failed'));
+		return { totalPages: 0, pages: [], metadata: { DOI: dois.join(' ') },
+			hints: { title: title.slice(0, 500), author: authors.slice(0, 200), year } };
+	};
+
+	/**
+	 * Send at most 50 MB to an explicitly enabled, already-running local service.
+	 * One queue item runs at a time; cancel aborts its XHR. No session credentials,
+	 * cookies, redirects, full-text logs, or PDF uploads to the remote worker occur.
+	 */
+	this.extractLocalGROBID = async function (filePath, configuration) {
+		let url = this.getLocalGROBIDURL(configuration.grobidURL);
+		if ((await IOUtils.stat(filePath)).size > 50 * 1024 * 1024) {
+			throw new Error(Zotero.getString('recognition-grobid-too-large'));
+		}
+		Components.utils.importGlobalProperties(['File', 'FormData']);
+		let file = await File.createFromFileName(filePath);
+		let body = new FormData();
+		body.append('input', file, 'document.pdf');
+		body.append('consolidateHeader', '0');
+		body.append('start', '0');
+		body.append('end', '2');
+		try {
+			if (configuration.cancelRevision != _cancelRevision) throw new Error('Cancelled');
+			let response = await Zotero.HTTP.request('POST', url + 'api/processHeaderDocument', {
+				body, headers: { 'Content-Type': 'multipart/form-data', Accept: 'application/xml' },
+				anon: true, followRedirects: false, timeout: 60000, errorDelayMax: 0, logBodyLength: 0,
+				requestObserver: xhr => { _localRequest = xhr; }
+			});
+			if (response.status != 200) throw new Error('Unexpected status');
+			return this.parseGROBIDHeader(response.responseText);
+		}
+		catch (_error) { throw new Error(Zotero.getString('recognition-grobid-failed')); }
+		finally { _localRequest = null; }
 	};
 	
 	/**
@@ -525,8 +823,9 @@ Zotero.RecognizeDocument = new function () {
 	}
 	
 	/**
-	 * Preserve the upstream extraction, identifier lookup, and item-saving flow.
-	 * Only the request destination and fallback catalog label depend on the engine.
+	 * Preserve upstream extraction and item-saving behavior. Version 2 EpiLib
+	 * responses already contain resolved records and bypass desktop translators.
+	 * Legacy EpiLib/Zotero responses retain the existing identifier lookup below.
 	 * @param {Zotero.Item} item - Standalone PDF attachment to recognize.
 	 * @param {string} filePath - Existing local attachment path.
 	 * @param {object} configuration - Provider snapshot captured before file I/O.
@@ -551,6 +850,23 @@ Zotero.RecognizeDocument = new function () {
 		let libraryID = item.libraryID;
 		
 		let res = await Zotero.RecognizeDocument.queryPDFMetadata(json, configuration);
+		if (configuration.engine == 'epilib' && res?.engine == 'epilib' && res.version == 2) {
+			if (res.status == 'no_match' && configuration.grobidEnabled) {
+				let hints = await Zotero.RecognizeDocument.extractLocalGROBID(filePath, configuration);
+				res = await Zotero.RecognizeDocument.queryPDFMetadata(hints, configuration);
+			}
+			if (configuration.cancelRevision != _cancelRevision) throw new Error(Zotero.getString('recognition-cancelled'));
+			let record = res?.status == 'matched' ? res.item : res?.status == 'needs_review'
+				? Zotero.RecognizeDocument.chooseRecognitionCandidate(res.candidates) : null;
+			if (!record) return null;
+			let parent = new Zotero.Item();
+			parent.libraryID = libraryID;
+			// Match translator imports: provider subjects are automatic tags and
+			// must respect the user's global preference for importing such tags.
+			parent.fromJSON(Zotero.Prefs.get('automaticTags') ? record : { ...record, tags: [] });
+			await parent.saveTx();
+			return parent;
+		}
 		if (!res) return null;
 		
 		if (res.arxiv) {

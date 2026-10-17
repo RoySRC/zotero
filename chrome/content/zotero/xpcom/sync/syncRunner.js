@@ -117,9 +117,19 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 	 * @param {Function}  [options.onError]           Function to pass errors to instead of
 	 *                                                handling internally (used for testing)
 	 */
-	this.sync = Zotero.serial(function (options = {}) {
+	let syncSerial = Zotero.serial(function (options) {
 		return this._sync(options);
 	});
+	this.sync = function (options = {}) {
+		// Settings panes are disposable sandboxes. Copy option data into the
+		// runner before queueing, not after a previous sync finishes, so closing
+		// Settings cannot invalidate a queued/in-flight sync's configuration.
+		let ownedOptions = { ...options };
+		for (let field of ['libraries', 'fileLibraries', 'fullTextLibraries']) {
+			if (Array.isArray(ownedOptions[field])) ownedOptions[field] = Array.from(ownedOptions[field]);
+		}
+		return syncSerial.call(this, ownedOptions);
+	};
 
 
 	this._sync = async function (options) {

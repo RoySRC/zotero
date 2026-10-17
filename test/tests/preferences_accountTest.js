@@ -53,6 +53,22 @@ describe("Account Preferences", function () {
 		assert.isFalse(Zotero.HTTP.request.called);
 	});
 
+	it("unregisters the library observer before the preferences sandbox is destroyed", async function () {
+		let sync = win.Zotero_Preferences.Sync;
+		let id = sync._storageLibraryNotifierID;
+		assert.isString(id);
+		let unregister = sandbox.spy(Zotero.Notifier, 'unregisterObserver');
+		let clearTimer = sandbox.spy(win, 'clearTimeout');
+		sync._scheduleStorageLibraryRefresh('test');
+		let timer = sync._storageLibraryRefreshTimerID;
+		// The pane event precedes Cu.nukeSandbox(); window unload is too late.
+		doc.getElementById('zotero-prefpane-account').dispatchEvent(new win.Event('unload'));
+		assert.isTrue(unregister.calledWith(id));
+		assert.isTrue(clearTimer.calledWith(timer));
+		assert.isNull(sync._storageLibraryNotifierID);
+		assert.isNull(sync._storageLibraryRefreshTimerID);
+	});
+
 	it("keeps the server token when logout is cancelled", async function () {
 		let dialog = waitForDialog(null, 'cancel');
 		await win.Zotero_Preferences.Sync.unlinkAccount();

@@ -1463,6 +1463,48 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 			Zotero.Prefs.clear('lastWebDAVOrphanPurge');
 		})
 		
+		it("ignores metadata folders and nested files when purging orphaned attachments", async function () {
+			let library = Zotero.Libraries.userLibrary;
+			library.updateLastSyncTime();
+			await library.saveTx();
+			let beforeTime = new Date(Date.now() - 8 * 86400 * 1000).toUTCString();
+			// Some servers mark directories only through resourcetype, while
+			// others return a trailing slash. Neither form is an attachment.
+			let resources = [
+				['', true],
+				['metadata/', false],
+				['AAAAAAAA.zip', true],
+				['metadata/BBBBBBBB.zip', false],
+				['metadata%2FCCCCCCCC.prop', false],
+				['DDDDDDDD.zip', false]
+			];
+			setResponse({
+				method: 'PROPFIND',
+				url: 'zotero/',
+				status: 207,
+				headers: { 'Content-Type': 'text/xml; charset="utf-8"' },
+				text: '<D:multistatus xmlns:D="DAV:">'
+					+ resources.map(([path, collection]) => `<D:response>
+						<D:href>${davBasePath}zotero/${path}</D:href>
+						<D:propstat><D:prop>
+							<D:resourcetype>${collection ? '<D:collection/>' : ''}</D:resourcetype>
+							<D:getlastmodified>${beforeTime}</D:getlastmodified>
+						</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>
+					</D:response>`).join('') + '</D:multistatus>'
+			});
+			let remove = sinon.stub(controller, '_deleteStorageFiles').resolves({
+				deleted: [], missing: [], error: []
+			});
+			try {
+				await controller.purgeOrphanedStorageFiles();
+				assert.isTrue(remove.calledOnce);
+				assert.sameMembers(remove.firstCall.args[0], ['DDDDDDDD.zip']);
+			}
+			finally {
+				remove.restore();
+			}
+		});
+
 		it("should delete orphaned files more than a week older than the last sync time", async function () {
 			var library = Zotero.Libraries.userLibrary;
 			library.updateLastSyncTime();

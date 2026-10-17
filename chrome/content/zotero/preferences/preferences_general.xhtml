@@ -125,12 +125,25 @@
 			<vbox id="pdf-recognition-server" hidden="true">
 				<html:div class="recognition-server-row">
 					<html:label for="pdf-recognition-url" data-l10n-id="preferences-recognition-server"/>
-					<html:input id="pdf-recognition-url" type="text" readonly="readonly"/>
+					<html:input id="pdf-recognition-url" type="url"
+						preference="extensions.zotero.recognize.epilib.url"/>
 				</html:div>
 				<hbox>
 					<button id="pdf-recognition-verify" data-l10n-id="preferences-recognition-verify"
 						oncommand="Zotero_Preferences.General.verifyRecognitionServer()"/>
 				</hbox>
+				<checkbox id="pdf-recognition-grobid" data-l10n-id="preferences-recognition-grobid"
+					preference="extensions.zotero.recognize.grobid.enabled"/>
+				<vbox id="pdf-recognition-grobid-settings" hidden="true">
+					<html:div class="recognition-server-row">
+						<html:label for="pdf-recognition-grobid-url" data-l10n-id="preferences-recognition-grobid-url"/>
+						<html:input id="pdf-recognition-grobid-url" type="url"
+							preference="extensions.zotero.recognize.grobid.url"/>
+					</html:div>
+					<hbox><button id="pdf-recognition-grobid-verify" data-l10n-id="preferences-recognition-grobid-verify"
+						oncommand="Zotero_Preferences.General.verifyLocalGROBID()"/></hbox>
+					<html:p id="pdf-recognition-grobid-status" role="status" aria-live="polite"/>
+				</vbox>
 			</vbox>
 			<html:p id="pdf-recognition-status" role="status" aria-live="polite"/>
 		</groupbox>

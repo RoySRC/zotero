@@ -73,7 +73,7 @@ Zotero_Preferences.Sync = {
 	},
 
 	_registerStorageLibraryObserver: function () {
-		if (this._storageLibraryNotifierID) {
+		if (window.closed || this._storageLibraryNotifierID) {
 			return;
 		}
 
@@ -86,7 +86,9 @@ Zotero_Preferences.Sync = {
 			}
 		}, ['group', 'sync'], 'preferencesAccountStorageLibraries');
 
-		window.addEventListener('unload', () => {
+		// The preferences host dispatches unload to the pane before nuking its
+		// sandbox. Window unload listeners run too late to release these objects.
+		document.getElementById('zotero-prefpane-account').addEventListener('unload', () => {
 			if (this._storageLibraryNotifierID) {
 				Zotero.Notifier.unregisterObserver(this._storageLibraryNotifierID);
 				this._storageLibraryNotifierID = null;

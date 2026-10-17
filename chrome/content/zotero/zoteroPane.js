@@ -4261,6 +4261,7 @@ var ZoteroPane = new function () {
 			'loadReport',
 			'sep5',
 			'recognizePDF',
+			'refreshPublishedMetadata',
 			'unrecognize',
 			'createParent',
 			'reindexItem',
@@ -4309,6 +4310,10 @@ var ZoteroPane = new function () {
 		}
 		
 		var items = this.getSelectedItems();
+		if (!isTrash && items.length == 1 && Zotero.RecognizeDocument.canRefreshPublishedMetadata(items[0])) {
+			show.add(m.sep5);
+			show.add(m.refreshPublishedMetadata);
+		}
 
 		// A report URL is scoped to a single library, so disable it when the selected
 		// items span libraries (possible in a cross-library items list)
@@ -4747,6 +4752,7 @@ var ZoteroPane = new function () {
 		menu.childNodes[m.loadReport].setAttribute('label', Zotero.getString('pane.items.menu.generateReport' + multiple));
 		menu.childNodes[m.createParent].setAttribute('label', Zotero.getString('pane.items.menu.createParent' + multiple));
 		menu.childNodes[m.recognizePDF].setAttribute('label', Zotero.getString('pane.items.menu.recognizeDocument'));
+		menu.childNodes[m.refreshPublishedMetadata].setAttribute('label', Zotero.getString('recognition-refresh-published'));
 		menu.childNodes[m.reindexItem].setAttribute('label', Zotero.getString('pane.items.menu.reindexItem' + multiple));
 		
 		// Hide and enable all actions by default (so if they're shown they're enabled)
@@ -6386,6 +6392,19 @@ var ZoteroPane = new function () {
 	this.recognizeSelected = function () {
 		Zotero.RecognizeDocument.recognizeItems(ZoteroPane.getSelectedItems());
 		Zotero.ProgressQueues.get('recognize').getDialog().open();
+	};
+
+	/** Explicit, confirmed metadata refresh; errors remain in the current window. */
+	this.refreshSelectedPublishedMetadata = async function () {
+		let items = this.getSelectedItems();
+		if (items.length != 1) return;
+		try {
+			await Zotero.RecognizeDocument.refreshPublishedMetadata(items[0]);
+		}
+		catch (error) {
+			Zotero.logError(error);
+			Zotero.alert(window, Zotero.getString('general.error'), error.message);
+		}
 	};
 	
 	

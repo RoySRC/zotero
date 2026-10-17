@@ -68,18 +68,26 @@ Zotero_Preferences.General = {
 		}
 		// Invalidate a pending verification when this pane is closed.
 		this._recognitionRevision++;
+		this._grobidRevision++;
 	},
 
 	/**
 	 * Connect the native engine menu to preference binding in preferences.js.
 	 * Listening after synchronization covers both user choices and changes made by
-	 * another window. The server URL itself remains owned by Account Settings.
+	 * another window. The recognition URL has its own preference; leaving it empty
+	 * follows Account Settings without changing the metadata sync destination.
 	 */
 	_initRecognitionUI: function () {
 		this._recognitionRevision = 0;
+		this._grobidRevision = 0;
 		let menu = document.getElementById('pdf-recognition-engine');
 		menu.addEventListener('syncfrompreference', () => this._updateRecognitionUI());
 		menu.addEventListener('synctopreference', () => this._updateRecognitionUI());
+		for (let id of ['pdf-recognition-url', 'pdf-recognition-grobid', 'pdf-recognition-grobid-url']) {
+			let control = document.getElementById(id);
+			control.addEventListener('syncfrompreference', () => this._updateRecognitionUI());
+			control.addEventListener('synctopreference', () => this._updateRecognitionUI());
+		}
 		this._recognitionURLObserver = Zotero.Prefs.registerObserver(
 			'sync.metadata.postgresql.url', () => this._updateRecognitionUI());
 		this._updateRecognitionUI();
@@ -88,15 +96,28 @@ Zotero_Preferences.General = {
 	/** Refresh labels/state without sending a network request or uploading a PDF. */
 	_updateRecognitionUI: function () {
 		this._recognitionRevision++;
+		this._grobidRevision++;
 		let epilib = Zotero.Prefs.get('recognize.engine') == 'epilib';
 		let status = document.getElementById('pdf-recognition-status');
 		document.getElementById('pdf-recognition-server').hidden = !epilib;
+		document.getElementById('pdf-recognition-grobid-settings').hidden = !epilib
+			|| !Zotero.Prefs.get('recognize.grobid.enabled');
+		document.getElementById('pdf-recognition-grobid-status').textContent = '';
+		document.getElementById('pdf-recognition-grobid-verify').disabled = false;
 		document.getElementById('pdf-recognition-verify').disabled = false;
-		document.getElementById('pdf-recognition-url').value = '';
+		// Preference binding owns the editable value. Updating it here would erase
+		// partially typed URLs and move the caret whenever another control changes.
+		let urlInput = document.getElementById('pdf-recognition-url');
+		urlInput.placeholder = '';
+		try {
+			urlInput.placeholder = Zotero.RecognizeDocument.getDefaultRecognitionURL();
+		}
+		catch (_e) {
+			// A custom recognizer can be configured before an account server exists.
+		}
 		status.textContent = '';
 		try {
-			let configuration = Zotero.RecognizeDocument.getRecognitionConfiguration();
-			if (epilib) document.getElementById('pdf-recognition-url').value = configuration.baseURL;
+			Zotero.RecognizeDocument.getRecognitionConfiguration();
 		}
 		catch (e) {
 			status.textContent = e.message;
@@ -126,6 +147,25 @@ Zotero_Preferences.General = {
 		}
 		finally {
 			if (revision == this._recognitionRevision) button.disabled = false;
+		}
+	},
+
+	/** Probe the local service without sending a PDF or any account credentials. */
+	verifyLocalGROBID: async function () {
+		let revision = ++this._grobidRevision;
+		let button = document.getElementById('pdf-recognition-grobid-verify');
+		let status = document.getElementById('pdf-recognition-grobid-status');
+		button.disabled = true;
+		status.textContent = Zotero.getString('recognition-verifying');
+		try {
+			await Zotero.RecognizeDocument.verifyLocalGROBID();
+			if (revision == this._grobidRevision) status.textContent = Zotero.getString('recognition-grobid-verified');
+		}
+		catch (error) {
+			if (revision == this._grobidRevision) status.textContent = error.message;
+		}
+		finally {
+			if (revision == this._grobidRevision) button.disabled = false;
 		}
 	},
 

@@ -38,7 +38,8 @@
 	}
 }
 #pdf-recognition-group {
-	#pdf-recognition-server[hidden] { display: none; }
+	#pdf-recognition-server[hidden],
+	#pdf-recognition-grobid-settings[hidden] { display: none; }
 	.recognition-server-row {
 		display: grid;
 		grid-template-columns: max-content minmax(0, 1fr);
@@ -46,8 +47,10 @@
 		gap: 8px;
 		margin-block: 8px;
 	}
-	#pdf-recognition-url { width: 100%; min-width: 0; box-sizing: border-box; }
-	#pdf-recognition-status { overflow-wrap: anywhere; }
-	#pdf-recognition-status:empty { display: none; }
+	#pdf-recognition-url,
+	#pdf-recognition-grobid-url { width: 100%; min-width: 0; box-sizing: border-box; }
+	#pdf-recognition-status,
+	#pdf-recognition-grobid-status { overflow-wrap: anywhere; }
+	#pdf-recognition-status:empty,
+	#pdf-recognition-grobid-status:empty { display: none; }
 }
-

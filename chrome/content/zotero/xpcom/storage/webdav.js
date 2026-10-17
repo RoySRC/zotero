@@ -1387,6 +1387,7 @@ Zotero.Sync.Storage.Mode.WebDAV.prototype = {
 		
 		var contentTypeXML = { "Content-Type": "text/xml; charset=utf-8" };
 		var xmlstr = "<propfind xmlns='DAV:'><prop>"
+			+ "<resourcetype/>"
 			+ "<getlastmodified/>"
 			+ "</prop></propfind>";
 		
@@ -1428,6 +1429,7 @@ Zotero.Sync.Storage.Mode.WebDAV.prototype = {
 				response, "D:href", { D: 'DAV:' }
 			) || "";
 			Zotero.debug("Checking response entry " + href);
+			let directoryHref = href.endsWith('/');
 			
 			// Strip trailing slash if there isn't one on the root path
 			if (!trailingSlash) {
@@ -1452,10 +1454,22 @@ Zotero.Sync.Storage.Mode.WebDAV.prototype = {
 				continue;
 			}
 			
-			if (!decodedHref.startsWith(decodedPath)) {
+			let rootPrefix = decodedPath.replace(/\/?$/, '/');
+			if (!decodedHref.startsWith(rootPrefix)) {
 				throw new Error(`DAV:href '${href}' does not begin with path '${path}'`);
 			}
 			
+			// Legacy metadata folders (and other DAV collections) are not orphan
+			// attachment files. Never traverse or delete them, even if their name
+			// happens to end in .zip/.prop or the server omits a trailing slash.
+			let isCollection = Zotero.Utilities.xpath(response,
+				'D:propstat/D:prop/D:resourcetype/D:collection', { D: 'DAV:' }).length;
+			let relativePath = decodedHref.slice(rootPrefix.length);
+			if (directoryHref || isCollection || relativePath.includes('/')) {
+				Zotero.debug("Skipping WebDAV directory or nested resource " + href);
+				continue;
+			}
+
 			var matches = href.match(/[^\/]+$/);
 			if (!matches) {
 				throw new Error(`Unexpected href '${href}'`);

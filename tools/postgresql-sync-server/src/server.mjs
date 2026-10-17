@@ -692,6 +692,7 @@ async function uploadObjects(req, res) {
 			let data = shouldMerge
 				? Object.assign({}, existingRow.data, object)
 				: Object.assign({}, object);
+			data = normalizeObjectHierarchy(objectType, data);
 			if (objectType == 'item' && !data.itemType) {
 				failed[i] = { code: 400, message: 'itemType property not provided' };
 				continue;
@@ -1780,10 +1781,30 @@ function objectResponse(library, objectType, row) {
 	};
 }
 
+/**
+ * Collection membership belongs to top-level items, not their child attachments
+ * or notes. A partial update that adds a parent must drop inherited collections;
+ * otherwise the echoed record fails the desktop's collectionItems constraint.
+ * Explicitly clearing a parent also removes the field so /items/top includes it.
+ * Work on a copy so response normalization never mutates a fetched database row.
+ */
+function normalizeObjectHierarchy(objectType, data) {
+	if (objectType != 'item' || !data || !['attachment', 'note', 'annotation'].includes(data.itemType)) {
+		return data;
+	}
+	let normalized = { ...data };
+	if (normalized.parentItem) delete normalized.collections;
+	else delete normalized.parentItem;
+	return normalized;
+}
+
 function canonicalizeObjectData(objectType, data) {
 	if (objectType != 'item' || !data || typeof data != 'object' || Array.isArray(data)) {
 		return data;
 	}
+	// Also sanitize old records and conflict responses created before writes
+	// enforced the hierarchy invariant; a retry must not reintroduce bad data.
+	data = normalizeObjectHierarchy(objectType, data);
 
 	let ordered = {};
 	for (let field of canonicalItemFieldOrder) {
