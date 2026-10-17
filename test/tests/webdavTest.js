@@ -395,19 +395,21 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 			);
 		})
 
-		it("should bootstrap a missing profiled WebDAV file from Zotero Storage", async function () {
+		it("should not bootstrap a missing profiled WebDAV file from Zotero Storage", async function () {
 			let group = await createGroup({ editable: true, filesEditable: false });
 			let item = new Zotero.Item("attachment");
 			item.libraryID = group.libraryID;
 			item.attachmentLinkMode = 'imported_file';
 			item.attachmentPath = 'storage:test.pdf';
 			item.attachmentSyncState = 'to_download';
-			await item.saveTx();
+			// Seed an attachment received through metadata sync in a file-read-only group.
+			await item.saveTx({ skipEditCheck: true });
 
 			let profiledController = new Zotero.Sync.Storage.Mode.WebDAV({
 				libraryID: group.libraryID,
 				profileID: 'project-a',
-				apiClient: {}
+				apiClient: {},
+				zoteroStorageAPIClient: { apiKey: 'obsolete-cloud-key' }
 			});
 			let initStub = sinon.stub(profiledController, '_init').resolves();
 			let metadataStub = sinon.stub(profiledController, '_getStorageFileMetadata')
@@ -433,12 +435,12 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 
 				assert.isTrue(initStub.calledOnce);
 				assert.isTrue(metadataStub.calledOnce);
-				assert.isTrue(zfsStub.calledOnce);
-				assert.isTrue(result.localChanges);
-				assert.isTrue(result.fileSyncRequired);
+				assert.isFalse(zfsStub.called);
+				assert.isFalse(result.localChanges);
+				assert.isFalse(result.fileSyncRequired);
 				assert.equal(
 					Zotero.Items.get(item.id).attachmentSyncState,
-					Zotero.Sync.Storage.Local.SYNC_STATE_TO_UPLOAD
+					Zotero.Sync.Storage.Local.SYNC_STATE_IN_SYNC
 				);
 			}
 			finally {
@@ -1038,11 +1040,25 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 	});
 	
 	describe("Verify Server", function () {
+		async function loadWebDAVPreferences() {
+			let win = await loadPrefPane('account');
+			try {
+				// Account initialization now loads metadata settings before reading the keystore.
+				await waitForCallback(() => win.document.getElementById('storage-password').value === davPassword,
+					25, 5);
+				return win;
+			}
+			catch (e) {
+				win.close();
+				throw e;
+			}
+		}
+
 		it("should show an error for a connection error", async function () {
 			Zotero.Prefs.set("sync.storage.url", "127.0.0.1:9999");
 			
 			// Begin install procedure
-			var win = await loadPrefPane('account');
+			var win = await loadWebDAVPreferences();
 			var button = win.document.getElementById('storage-verify');
 			
 			var spy = sinon.spy(win.Zotero_Preferences.Sync, "verifyStorageServer");
@@ -1082,7 +1098,7 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 			);
 			
 			// Begin install procedure
-			var win = await loadPrefPane('account');
+			var win = await loadWebDAVPreferences();
 			var button = win.document.getElementById('storage-verify');
 			
 			var spy = sinon.spy(win.Zotero_Preferences.Sync, "verifyStorageServer");
@@ -1118,7 +1134,7 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 			Zotero.Prefs.set("sync.storage.url", davHostPath);
 			
 			// Begin install procedure
-			var win = await loadPrefPane('account');
+			var win = await loadWebDAVPreferences();
 			var button = win.document.getElementById('storage-verify');
 			
 			var spy = sinon.spy(win.Zotero_Preferences.Sync, "verifyStorageServer");
@@ -1173,7 +1189,7 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 			);
 			
 			// Begin verify procedure
-			var win = await loadPrefPane('account');
+			var win = await loadWebDAVPreferences();
 			var button = win.document.getElementById('storage-verify');
 			
 			var spy = sinon.spy(win.Zotero_Preferences.Sync, "verifyStorageServer");
@@ -1228,7 +1244,7 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 			Zotero.Prefs.set("sync.storage.url", davHostPath);
 			
 			// Begin install procedure
-			var win = await loadPrefPane('account');
+			var win = await loadWebDAVPreferences();
 			var button = win.document.getElementById('storage-verify');
 			
 			var spy = sinon.spy(win.Zotero_Preferences.Sync, "verifyStorageServer");

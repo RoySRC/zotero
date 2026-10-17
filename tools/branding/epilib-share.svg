@@ -7,8 +7,9 @@
   <rect x="107" y="170" width="202" height="158" rx="12" fill="#f4f6f6" stroke="#dfe3e4"/>
   <path d="M179 182h58" stroke="#c9ced0" stroke-width="4" stroke-linecap="round"/>
   <rect x="124" y="209" width="40" height="40" rx="8" fill="#e3e7e8"/>
-  <rect x="188" y="209" width="40" height="40" rx="8" fill="#12665c"/>
-  <path d="M199 219h19v4h-14v4h11v4h-11v4h14v4h-19z" fill="#fff"/>
+  <svg x="188" y="209" width="40" height="40" viewBox="312 240 629 662" preserveAspectRatio="xMidYMid meet" overflow="hidden">
+    <image width="1254" height="1254" href="../../epilib-icons/compact.png"/>
+  </svg>
   <rect x="252" y="209" width="40" height="40" rx="8" fill="#e3e7e8"/>
   <path d="M125 277h166m-166 22h166" stroke="#dfe3e4" stroke-width="5"/>
 </svg>

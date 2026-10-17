@@ -31,6 +31,8 @@ Zotero.RecognizeDocument = new function () {
 	const EPUB_MAX_SECTIONS = 5;
 	
 	let _newItems = new WeakMap();
+	// Feedback must use the original recognizer, even if Settings changes later.
+	let _recognitionOrigins = new WeakMap();
 	
 	let _queue = [];
 	let _queueProcessing = false;
@@ -221,9 +223,20 @@ Zotero.RecognizeDocument = new function () {
 	};
 	
 	
+	/**
+	 * Send user-requested feedback only to the service that recognized this item
+	 * in this session. EpiLib v1 intentionally has no document-feedback storage.
+	 * @param {Zotero.Item} item - Recognized parent item, not the PDF attachment.
+	 * @param {string} description - User-supplied explanation of the incorrect match.
+	 * @returns {Promise<void>} Resolves after the original service accepts feedback.
+	 */
 	this.report = async function (item, description) {
+		let configuration = _recognitionOrigins.get(item);
+		if (!configuration || configuration.engine != 'zotero') {
+			throw new Error(Zotero.getString('recognition-feedback-unavailable'));
+		}
 		var attachment = Zotero.Items.get(item.getAttachments()[0]);
-		var filePath = attachment.getFilePath();
+		var filePath = await attachment.getFilePath();
 		if (!filePath || !(await OS.File.exists(filePath))) {
 			throw new Error("File not found when reporting metadata");
 		}
@@ -233,18 +246,7 @@ Zotero.RecognizeDocument = new function () {
 		var metadata = item.toJSON();
 		
 		var data = { description, version, json, metadata };
-		var url = _getBaseURL() + 'report';
-		return Zotero.HTTP.request(
-			"POST",
-			url,
-			{
-				successCodes: [200, 204],
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify(data)
-			}
-		);
+		await _request(configuration, 'report', data, [200, 204]);
 	};
 	
 	
@@ -369,23 +371,134 @@ Zotero.RecognizeDocument = new function () {
 		throw new Error('No items found');
 	}
 	
-	async function _query(json) {
-		var uri = _getBaseURL() + 'recognize';
-		let client = Zotero.Sync.Runner.getAPIClient();
-		let req = await client.makeRequest(
-			'POST',
-			uri,
-			{
-				successCodes: [200],
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify(json),
-				noAPIKey: true
+	/**
+	 * Snapshot the selected engine and destination before starting asynchronous PDF
+	 * work. Tokens are deliberately NOT stored here or in the feedback-origin map.
+	 * Legacy URL overrides apply only to the explicitly selected Zotero service.
+	 * @returns {{engine:string, baseURL:string}} Immutable routing configuration.
+	 */
+	this.getRecognitionConfiguration = function () {
+		let engine = Zotero.Prefs.get('recognize.engine');
+		let baseURL;
+		if (engine == 'zotero') {
+			baseURL = _getBaseURL();
+		}
+		else if (engine == 'epilib') {
+			try {
+				let server = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
+				if (!server) throw new Error('No server configured');
+				baseURL = server + 'recognizer/';
 			}
-		);
-		return JSON.parse(req.responseText);
+			catch (_e) {
+				throw new Error(Zotero.getString('recognition-server-required'));
+			}
+		}
+		else {
+			throw new Error(Zotero.getString('recognition-engine-invalid'));
+		}
+		let url = new URL(baseURL);
+		if (!['https:', 'http:'].includes(url.protocol)
+				|| url.username || url.password || url.search || url.hash) {
+			throw new Error(Zotero.getString('recognition-url-invalid'));
+		}
+		return Object.freeze({ engine, baseURL: url.href });
+	};
+
+	/**
+	 * Perform a single-provider request. Never retry against another engine, follow
+	 * redirects, log PDF text, or send the PostgreSQL token to Zotero. A server change
+	 * during extraction/token retrieval aborts the request instead of leaking a token.
+	 * @param {object} configuration - Snapshot from getRecognitionConfiguration().
+	 * @param {'recognize'|'health'|'report'} endpoint - Relative API operation.
+	 * @param {object} [body] - Extracted PDF data; omitted for a health check.
+	 * @param {number[]} [successCodes] - Accepted HTTP statuses.
+	 * @returns {Promise<XMLHttpRequest>} Successful response, without JSON parsing.
+	 */
+	async function _request(configuration, endpoint, body, successCodes = [200]) {
+		let headers = { 'Content-Type': 'application/json' };
+		if (configuration.engine == 'epilib') {
+			let baseURL = Zotero.Sync.Metadata.getPostgreSQLBaseURL();
+			if (!baseURL || configuration.baseURL != new URL(baseURL + 'recognizer/').href) {
+				throw new Error(Zotero.getString('recognition-server-changed'));
+			}
+			let key = await Zotero.Sync.Metadata.getPostgreSQLAPIKey();
+			if (baseURL != Zotero.Sync.Metadata.getPostgreSQLBaseURL()) {
+				throw new Error(Zotero.getString('recognition-server-changed'));
+			}
+			if (!key) throw new Error(Zotero.getString('recognition-login-required'));
+			headers['Zotero-API-Key'] = key;
+		}
+		let response;
+		try {
+			response = await Zotero.HTTP.request(body === undefined ? 'GET' : 'POST',
+				configuration.baseURL + endpoint, {
+					headers,
+					body: body === undefined ? undefined : JSON.stringify(body),
+					logBodyLength: 0,
+					anon: true,
+					followRedirects: false,
+					timeout: 30000,
+					errorDelayMax: 0,
+					successCodes
+				});
+			// HTTP.request returns redirects when following is disabled, even if the
+			// status is outside successCodes. Reject before consuming their contents.
+			if (!successCodes.includes(response.status)) throw new Error('Unexpected status');
+		}
+		catch (e) {
+			let status = e.status || response?.status;
+			if (status == 401 || status == 403) {
+				throw new Error(Zotero.getString('recognition-access-denied'));
+			}
+			throw new Error(Zotero.getString('recognition-request-failed'));
+		}
+		return response;
 	}
+
+	/** Parse JSON without echoing a possibly sensitive HTML/error response. */
+	function _parseResponse(response) {
+		try {
+			return JSON.parse(response.responseText);
+		}
+		catch (_e) {
+			throw new Error(Zotero.getString('recognition-response-invalid'));
+		}
+	}
+
+	/**
+	 * Query either engine using the existing extraction payload and recognition
+	 * response contract. Null is a valid no-match result; malformed results must
+	 * never reach item creation and create a partial bibliographic record.
+	 * @param {object} json - PDF worker output plus fileName, unchanged.
+	 * @param {object} [configuration] - Optional already-captured provider snapshot.
+	 * @returns {Promise<object|null>} Identifier or bibliographic recognition result.
+	 */
+	this.queryPDFMetadata = async function (json, configuration = this.getRecognitionConfiguration()) {
+		let result = _parseResponse(await _request(configuration, 'recognize', json));
+		if (result === null) return null;
+		let fields = ['doi', 'arxiv', 'isbn', 'title'];
+		if (!result || typeof result != 'object' || Array.isArray(result)
+				|| !fields.some(key => typeof result[key] == 'string' && result[key].trim())
+				|| fields.some(key => result[key] !== undefined && typeof result[key] != 'string')
+				|| (result.title && (!Array.isArray(result.authors) || result.authors.some(author => (
+					!author || (author.firstName !== undefined && typeof author.firstName != 'string')
+					|| typeof author.lastName != 'string'
+				))))) {
+			throw new Error(Zotero.getString('recognition-response-invalid'));
+		}
+		return result;
+	};
+
+	/** Verify EpiLib protocol availability without extracting or uploading a PDF. */
+	this.verifyRecognitionServer = async function () {
+		let configuration = this.getRecognitionConfiguration();
+		if (configuration.engine != 'epilib') throw new Error(Zotero.getString('recognition-engine-invalid'));
+		let result = _parseResponse(await _request(configuration, 'health'));
+		if (result?.engine != 'epilib' || result.version != 1 || result.protocol != 'zotero-recognizer-json') {
+			throw new Error(Zotero.getString('recognition-response-invalid'));
+		}
+		return result;
+	};
 	
 	/**
 	 * Retrieves metadata for a PDF or EPUB and saves it as an item
@@ -393,12 +506,15 @@ Zotero.RecognizeDocument = new function () {
 	 * @return {Promise<Zotero.Item>} - New item
 	 */
 	this._recognize = async function (item) {
+		let configuration = item.isPDFAttachment() ? this.getRecognitionConfiguration() : null;
 		let filePath = await item.getFilePath();
 		
 		if (!filePath || !(await OS.File.exists(filePath))) throw new Zotero.Exception.Alert('recognizePDF.fileNotFound');
 
 		if (item.isPDFAttachment()) {
-			return _recognizePDF(item, filePath);
+			let parent = await _recognizePDF(item, filePath, configuration);
+			if (parent) _recognitionOrigins.set(parent, configuration);
+			return parent;
 		}
 		else if (item.isEPUBAttachment()) {
 			return _recognizeEPUB(item, filePath);
@@ -408,7 +524,15 @@ Zotero.RecognizeDocument = new function () {
 		}
 	}
 	
-	async function _recognizePDF(item, filePath) {
+	/**
+	 * Preserve the upstream extraction, identifier lookup, and item-saving flow.
+	 * Only the request destination and fallback catalog label depend on the engine.
+	 * @param {Zotero.Item} item - Standalone PDF attachment to recognize.
+	 * @param {string} filePath - Existing local attachment path.
+	 * @param {object} configuration - Provider snapshot captured before file I/O.
+	 * @returns {Promise<Zotero.Item|null>} Saved parent item, or no match.
+	 */
+	async function _recognizePDF(item, filePath, configuration) {
 		let json = await extractPDFJSON(item.id);
 		json.fileName = PathUtils.filename(filePath);
 		
@@ -426,7 +550,7 @@ Zotero.RecognizeDocument = new function () {
 		
 		let libraryID = item.libraryID;
 		
-		let res = await _query(json);
+		let res = await Zotero.RecognizeDocument.queryPDFMetadata(json, configuration);
 		if (!res) return null;
 		
 		if (res.arxiv) {
@@ -568,7 +692,7 @@ Zotero.RecognizeDocument = new function () {
 				if (res.publisher) newItem.setField('publisher', res.publisher);
 			}
 			
-			newItem.setField('libraryCatalog', 'Zotero');
+			newItem.setField('libraryCatalog', configuration.engine == 'epilib' ? 'EpiLib' : 'Zotero');
 			
 			await newItem.saveTx();
 			return newItem;
@@ -767,8 +891,10 @@ Zotero.RecognizeDocument = new function () {
 	}
 	
 	/**
-	 * To customize the recognizer endpoint, set either recognize.url (used directly)
-	 * or services.url (used with a 'recognizer/' suffix).
+	 * Resolve the Zotero provider's existing endpoint overrides. These preferences
+	 * are intentionally ignored for EpiLib, which uses the authenticated Account
+	 * server. recognize.url is direct; services.url receives a recognizer/ suffix.
+	 * @returns {string} Zotero-provider base URL with trailing slash.
 	 */
 	function _getBaseURL() {
 		var url = Zotero.Prefs.get("recognize.url");
@@ -785,4 +911,3 @@ Zotero.RecognizeDocument = new function () {
 		return url + "recognizer/";
 	}
 };
-

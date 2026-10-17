@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254">
+  <!-- Follow the macOS reference: solid page blocks behind the bookmark and above the bottom cover. -->
+  <g fill="white">
+    <path d="M120 465 L250 495 L410 430 L410 500 L250 565 L120 533 Q100 530 100 500 Q100 475 120 465 Z"/>
+    <path d="M76 518 L255 566 L390 508 Q402 504 402 517 L402 601 Q402 610 391 616 L255 679 L86 629 Q67 623 67 605 L67 535 Q67 523 76 518 Z"/>
+    <path d="M89 625 L255 675 L390 614 L401 650 L401 696 L232 750 L120 725 Q100 720 100 695 Q100 675 120 665 L85 635 Z"/>
+  </g>
+</svg>

@@ -106,20 +106,6 @@ Zotero.Streamer_Module.prototype = {
 	 * Remove the API key subscription before the key is deleted
 	 */
 	removeSyncSubscription: async function () {
-		if (!this._subscriptions.has('sync')) {
-			return;
-		}
-		let apiKey = this.apiKey || (await Zotero.Sync.Data.Local.getAPIKey());
-		if (!apiKey || !this._socket || this._socket.readyState !== this._socket.OPEN) {
-			this._subscriptions.delete('sync');
-			return;
-		}
-		let data = JSON.stringify({
-			action: 'deleteSubscriptions',
-			subscriptions: [{ apiKey }]
-		});
-		Zotero.debug("WebSocket message send: " + this._hideAPIKey(data));
-		this._socket.send(data);
 		this._subscriptions.delete('sync');
 	},
 
@@ -150,27 +136,8 @@ Zotero.Streamer_Module.prototype = {
 			return;
 		}
 		
-		var apiKey = this.apiKey || (await Zotero.Sync.Data.Local.getAPIKey());
-		
 		var subscriptionsToAdd = [];
 		var subscriptionsToRemove = [];
-		
-		if (Zotero.Prefs.get('sync.autoSync') && Zotero.Sync.Runner.enabled) {
-			if (!this._subscriptions.has('sync')) {
-				// Subscribe to all topics accessible to the API key
-				subscriptionsToAdd.push({ apiKey });
-			}
-		}
-		else if (this._subscriptions.has('sync')) {
-			if (apiKey) {
-				subscriptionsToRemove.push({ apiKey });
-			}
-			else {
-				// API key was cleared -- just remove local tracking.
-				// The server will clean up on reconnect.
-				this._subscriptions.delete('sync');
-			}
-		}
 		
 		if (Zotero.Prefs.get('automaticScraperUpdates')) {
 			if (!this._subscriptions.has('bundled-files')) {
@@ -217,10 +184,9 @@ Zotero.Streamer_Module.prototype = {
 	
 	
 	_isEnabled: function () {
+		// Keep public translator/style notifications, never account subscriptions.
 		return Zotero.Prefs.get('streaming.enabled')
-			// Only connect if either auto-sync or automatic style/translator updates are enabled
-			&& ((Zotero.Prefs.get('sync.autoSync') && Zotero.Sync.Runner.enabled)
-				|| Zotero.Prefs.get('automaticScraperUpdates'));
+			&& Zotero.Prefs.get('automaticScraperUpdates');
 	},
 	
 	

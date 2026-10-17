@@ -1,0 +1,67 @@
+name: EpiLib Branding Gate
+on:
+  pull_request:
+  push:
+    branches: [rebranding]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: epilib-branding-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  branding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: epilib_test
+          POSTGRES_PASSWORD: disposable-ci-password
+          POSTGRES_DB: epilib_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U epilib_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin zstd xvfb dbus-x11 libgtk-3-0 libx11-xcb1 libdbus-glib-1-2 libxt6
+          npm ci
+          npm ci --prefix tools/postgresql-sync-server
+      - name: Validate branding and compatibility
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          node tools/branding/check-upstream.mjs
+          if [[ -n "$BASE" && "$BASE" != 0000000000000000000000000000000000000000 ]]; then
+            node tools/branding/check-upstream.mjs --base "$BASE"
+          fi
+          node --test tools/branding/*.test.mjs
+          python3 tools/branding/test_integrations.py
+      - name: Authentication and metadata regressions
+        env:
+          TEST_DATABASE_URL: postgres://epilib_test:disposable-ci-password@localhost:5432/epilib_test
+        run: npm test --prefix tools/postgresql-sync-server
+      - name: Build, UI smoke and packaged branding
+        env:
+          NODE_OPTIONS: --openssl-legacy-provider
+        run: |
+          app/scripts/fetch_xulrunner -p l
+          npm run build
+          xvfb-run -a test/runtests.sh -f -b epilibBranding epilibSyncIsolation recognitionEngine preferences_account storageLocal webdav syncLocal syncEngine syncRunner
+          xvfb-run -a test/runtests.sh -f -b -g 'standalone PDF by ISBN' recognizeDocument
+          app/scripts/dir_build -p l -f
+          python3 tools/branding/check-package.py app/staging/Zotero_linux-x86_64

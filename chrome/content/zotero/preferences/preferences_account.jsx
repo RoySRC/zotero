@@ -35,22 +35,18 @@ Zotero_Preferences.Sync = {
 	checkmarkChar: '\u2705',
 	noChar: '\uD83D\uDEAB',
 
-	_pendingSessionToken: null,
-	_loginResolve: null,
-	_loginReject: null,
-	_pollTimerID: null,
-	_pollInterval: 3000,
 	_storageLibraryNotifierID: null,
 	_storageLibraryRefreshTimerID: null,
 
 	init: async function () {
+		document.getElementById('storage-protocol').addEventListener('syncfrompreference', () => {
+			this.updateStorageSettingsUI();
+		});
 		this.storeLastStorageSettings();
 		this.updateStorageSettingsUI();
 		this.updateStorageSettingsGroupsUI();
 		await this.initMetadataSyncUI();
 
-		let postgreSQLMetadataEnabled = Zotero.Sync.Metadata.isPostgreSQLSyncEnabled();
-		var apiKey = await Zotero.Sync.Data.Local.getAPIKey();
 		await this._refreshAccountAndSyncUI();
 
 		var pass = await Zotero.Sync.Runner.getStorageController('webdav').getPassword();
@@ -59,46 +55,10 @@ Zotero_Preferences.Sync = {
 		}
 		this.initStorageProfilesUI();
 		this._registerStorageLibraryObserver();
-
-		if (!postgreSQLMetadataEnabled && apiKey) {
-			try {
-				var keyInfo = await Zotero.Sync.Runner.checkAccess(
-					Zotero.Sync.Runner.getAPIClient({ apiKey, metadataBackend: false }),
-					{timeout: 5000, includeEmails: true}
-				);
-				this.displayFields(keyInfo.username, { emails: keyInfo.emails });
-				if (keyInfo.emails) {
-					await Zotero.Users.setCurrentEmails(keyInfo.emails);
-				}
-			}
-			catch (e) {
-				// API key wrong/invalid
-				if (e instanceof Zotero.Error && e.error == Zotero.Error.ERROR_API_KEY_INVALID) {
-					Zotero.alert(
-						window,
-						Zotero.getString('general.error'),
-						Zotero.getString('sync.error.apiKeyInvalid', Zotero.clientName)
-					);
-					this.unlinkAccount(false);
-				}
-				else {
-					throw e;
-				}
-			}
-		}
-
-		window.addEventListener('beforeunload', () => {
-			if (this._pendingSessionToken) {
-				this.cancelLogin();
-			}
-		});
-
 		document.getElementById('zotero-prefpane-account').addEventListener('action', () => {
 			this._handlePendingAction();
 		});
-		// Auto-trigger login if opened with the 'logIn' action.
-		// This must be after the checkAccess call above, which may clear an
-		// invalid API key via unlinkAccount().
+		// Focus the server login fields when opened with the 'logIn' action.
 		this._handlePendingAction();
 
 		document.getElementById('storage-url-prefix').addEventListener('synctopreference', () => {
@@ -107,11 +67,8 @@ Zotero_Preferences.Sync = {
 	},
 
 	_handlePendingAction: async function () {
-		let action = Zotero_Preferences.consumePendingAction();
-		if (action == 'logIn'
-				&& !this._pendingSessionToken
-				&& !(await Zotero.Sync.Data.Local.getAPIKey())) {
-			setTimeout(() => this.linkAccount(), 0);
+		if (Zotero_Preferences.consumePendingAction() == 'logIn') {
+			this.linkAccount();
 		}
 	},
 
@@ -195,8 +152,6 @@ Zotero_Preferences.Sync = {
 			emails = Zotero.Users.getCurrentEmails();
 		}
 		this._updateEmails(emails);
-
-		this._showLoginDefault();
 	},
 
 
@@ -221,294 +176,8 @@ Zotero_Preferences.Sync = {
 	},
 
 
-	_secmodDeleted: false,
-	linkAccount: async function (_event) {
-		// Guard against double-click
-		if (this._pendingSessionToken) {
-			return;
-		}
-
-		let session;
-		try {
-			session = await Zotero.Sync.Runner.startLoginSession();
-		}
-		catch (e) {
-			setTimeout(function () {
-				Zotero.Sync.Runner.alert(e);
-			});
-			throw e;
-		}
-
-		let sessionToken = session.sessionToken;
-		this._pendingSessionToken = sessionToken;
-		this._showLoginPending();
-		Zotero.launchURL(session.loginURL);
-
-		let result;
-		try {
-			// Create a shared promise that either streaming or polling can resolve
-			let loginPromise = new Promise((resolve, reject) => {
-				this._loginResolve = resolve;
-				this._loginReject = reject;
-			});
-
-			// Register streaming listener for instant notification
-			this._subscribeToLoginSession(sessionToken);
-			// Start polling as fallback (fire-and-forget)
-			this._startPolling(sessionToken);
-
-			result = await loginPromise;
-		}
-		catch (e) {
-			this._pendingSessionToken = null;
-			this._showLoginDefault();
-			// Session expired
-			if (e.expired) {
-				Zotero.alert(
-					window,
-					Zotero.getString('general.error'),
-					Zotero.ftl.formatValueSync('account-error-login-session-expired')
-				);
-				return;
-			}
-			setTimeout(function () {
-				Zotero.Sync.Runner.alert(e);
-			});
-			throw e;
-		}
-		finally {
-			this._unsubscribeFromLoginSession(sessionToken);
-			this._stopPolling();
-			this._loginResolve = null;
-			this._loginReject = null;
-		}
-
-		// Login was cancelled
-		if (!result) {
-			this._pendingSessionToken = null;
-			this._showLoginDefault();
-			return;
-		}
-
-		// Validate and store the API key
-		try {
-			await Zotero.Sync.Runner.checkLoginSession(sessionToken, result);
-		}
-		catch (e) {
-			// The session already created a key on the server, so revoke it rather than
-			// leaving an active key we can't use
-			if (result.apiKey) {
-				try {
-					await Zotero.Sync.Runner.getAPIClient({
-						apiKey: result.apiKey,
-						metadataBackend: false
-					})
-						.deleteAPIKey();
-				}
-				catch (e2) {
-					Zotero.logError(e2);
-				}
-			}
-			this._pendingSessionToken = null;
-			this._showLoginDefault();
-			throw e;
-		}
-		// Handle secmod.db issue when storing the API key
-		// This can happen when people have a very old profile directory (e.g., from 2013)
-		try {
-			// Force a read to verify the key was stored
-			await Zotero.Sync.Data.Local.getAPIKey();
-		}
-		catch (e) {
-			if (e.message.includes("User canceled primary password entry")) {
-				Zotero.logError(e);
-				let profileDir = Zotero.Profile.dir;
-				let secmodPath = PathUtils.join(profileDir, 'secmod.db');
-				if (!this._secmodDeleted && !((await IOUtils.exists(secmodPath)))) {
-					Zotero.debug("secmod.db doesn't exist");
-					setTimeout(function () {
-						Zotero.Sync.Runner.alert(e);
-					});
-					throw e;
-				}
-				Zotero.debug("Deleting secmod.db", 2);
-				await IOUtils.remove(secmodPath);
-				// Once we've deleted, keep showing the restart message
-				this._secmodDeleted = true;
-
-				let index = Zotero.Prompt.confirm({
-					title: Zotero.getString('general.restartRequired'),
-					text: "Login information could not be saved.\n\n"
-						+ Zotero.getString('general.pleaseRestartAndTryAgain', Zotero.appName),
-					button0: Zotero.getString('general.restartNow'),
-					button1: Services.prompt.BUTTON_TITLE_CANCEL
-				});
-
-				if (index == 0) {
-					Zotero.Utilities.Internal.quit(true);
-					return;
-				}
-				this._pendingSessionToken = null;
-				this._showLoginDefault();
-				return;
-			}
-			throw e;
-		}
-
-		let ok = await Zotero.Sync.Data.Local.checkUser(
-			window,
-			result.userID,
-			result.username,
-			result.displayName,
-			result.emails
-		);
-		if (!ok) {
-			// Session created an API key, but user decided not to use it
-			Zotero.Sync.Runner.deleteAPIKey();
-			this._pendingSessionToken = null;
-			this._showLoginDefault();
-			return;
-		}
-
-		Zotero.Prefs.set('sync.server.username', result.username);
-
-		// It shouldn't be possible for a sync to be in progress if the user wasn't logged in,
-		// but check to be sure
-		if (!Zotero.Sync.Runner.syncInProgress) {
-			// Clear any displayed sync errors
-			Zotero.Sync.Runner.updateIcons([]);
-		}
-		window.addEventListener('beforeunload', () => {
-			Zotero.Sync.Runner.setSyncTimeout(1);
-		});
-
-		this._pendingSessionToken = null;
-		this.displayFields(result.username, { emails: result.emails });
-	},
-
-
-	_subscribeToLoginSession: function (sessionToken) {
-		let topic = "login-session:" + sessionToken;
-		Zotero.Streamer.subscribe([topic], (data) => {
-			if (this._loginResolve) {
-				if (data.event == "loginComplete") {
-					this._loginResolve(data);
-				}
-				else if (data.event == "loginCancelled") {
-					this._loginResolve(null);
-				}
-			}
-		});
-	},
-
-
-	_unsubscribeFromLoginSession: function (sessionToken) {
-		let topic = "login-session:" + sessionToken;
-		Zotero.Streamer.unsubscribe([topic]);
-	},
-
-
-	_startPolling: async function (sessionToken) {
-		let timeout = 10 * 60 * 1000; // 10 minutes
-		let startTime = Date.now();
-		let client = Zotero.Sync.Runner.getAPIClient({ metadataBackend: false });
-
-		while (true) {
-			// Wait before polling
-			await new Promise((resolve) => {
-				this._pollTimerID = setTimeout(resolve, this._pollInterval);
-			});
-			this._pollTimerID = null;
-
-			// Already resolved by streaming or cancel
-			if (!this._loginResolve) {
-				return;
-			}
-
-			// Check timeout
-			if (Date.now() - startTime > timeout) {
-				let e = new Error("Login session timed out");
-				e.expired = true;
-				this._loginReject(e);
-				return;
-			}
-
-			let result;
-			try {
-				result = await client.checkLoginSession(sessionToken);
-			}
-			catch (e) {
-				if (this._loginReject) {
-					this._loginReject(e);
-				}
-				return;
-			}
-
-			// Already resolved while we were awaiting
-			if (!this._loginResolve) {
-				return;
-			}
-
-			if (result.status == "completed") {
-				this._loginResolve(result);
-				return;
-			}
-			if (result.status == "cancelled") {
-				this._loginResolve(null);
-				return;
-			}
-			// "pending" -- continue polling
-		}
-	},
-
-
-	_stopPolling: function () {
-		if (this._pollTimerID) {
-			clearTimeout(this._pollTimerID);
-			this._pollTimerID = null;
-		}
-	},
-
-
-	cancelLogin: function () {
-		let token = this._pendingSessionToken;
-		this._pendingSessionToken = null;
-		if (this._loginResolve) {
-			this._loginResolve(null);
-		}
-		this._showLoginDefault();
-		if (token) {
-			// Don't unsubscribe here -- the finally block in linkAccount() handles it
-			// Fire-and-forget
-			Zotero.Sync.Runner.cancelLoginSession(token);
-		}
-	},
-
-
-	_showLoginPending: function () {
-		for (let elem of document.querySelectorAll('.account-login-default')) {
-			elem.hidden = true;
-		}
-		for (let elem of document.querySelectorAll('.account-login-pending')) {
-			elem.hidden = false;
-		}
-		for (let elem of document.querySelectorAll('.account-login-status-indicator')) {
-			elem.setAttribute('animated', true);
-		}
-	},
-
-
-	_showLoginDefault: function () {
-		for (let elem of document.querySelectorAll('.account-login-default')) {
-			elem.hidden = false;
-		}
-		for (let elem of document.querySelectorAll('.account-login-pending')) {
-			elem.hidden = true;
-		}
-		for (let elem of document.querySelectorAll('.account-login-status-indicator')) {
-			elem.removeAttribute('verified');
-			elem.removeAttribute('animated');
-		}
+	linkAccount: async function () {
+		document.getElementById('metadata-postgresql-url').focus();
 	},
 
 	unlinkAccount: async function(showAlert=true) {
@@ -786,7 +455,8 @@ Zotero_Preferences.Sync = {
 		var settings = document.getElementById('storage-webdav-settings');
 		var sep = document.getElementById('storage-separator');
 
-		if (!enabled || protocol == 'zotero') {
+		protocolMenu.value = protocol == 'webdav' ? 'webdav' : 'none';
+		if (!enabled || protocol != 'webdav') {
 			settings.hidden = true;
 			sep.hidden = false;
 		}
@@ -802,29 +472,15 @@ Zotero_Preferences.Sync = {
 
 	updateStorageSettingsGroupsUI: function () {
 		setTimeout(() => {
-			var enabled = Zotero.Prefs.get('sync.storage.groups.enabled');
 			document.getElementById('storage-groups-download-mode').disabled =
-				!enabled && !this._hasProfileAssignedGroup();
+				!this._hasProfileAssignedGroup();
 			this.updateStorageTerms();
 		});
 	},
 
 
 	updateStorageTerms: function () {
-		var terms = document.getElementById('storage-terms');
-
-		var libraryEnabled = Zotero.Prefs.get('sync.storage.enabled');
-		var storageProtocol = Zotero.Prefs.get('sync.storage.protocol');
-		var groupsEnabled = Zotero.Prefs.get('sync.storage.groups.enabled');
-		var userProfileID = Zotero.Sync.Storage.Profiles.getLibraryProfileID(
-			Zotero.Libraries.userLibraryID
-		);
-		var userUsesZFS = libraryEnabled && storageProtocol == 'zotero' && !userProfileID;
-		var groupUsesZFS = !this._isPostgreSQLMetadataBackendSelected()
-			&& groupsEnabled
-			&& this._hasDefaultStorageGroup();
-
-		terms.hidden = !(userUsesZFS || groupUsesZFS);
+		document.getElementById('storage-terms').hidden = true;
 	},
 
 
@@ -858,7 +514,7 @@ Zotero_Preferences.Sync = {
 
 	updateMetadataSyncUI: function () {
 		let backend = document.getElementById('metadata-backend').value
-			|| Zotero.Sync.Metadata.BACKEND_ZOTERO;
+			|| Zotero.Sync.Metadata.BACKEND_POSTGRESQL;
 		let usingPostgreSQL = backend == Zotero.Sync.Metadata.BACKEND_POSTGRESQL;
 		document.getElementById('metadata-postgresql-settings').hidden =
 			!usingPostgreSQL || !!this._metadataLoadInProgress;
@@ -1091,13 +747,7 @@ Zotero_Preferences.Sync = {
 			return;
 		}
 
-		let apiKey = await Zotero.Sync.Data.Local.getAPIKey();
-		let username = apiKey
-			? (Zotero.Users.getCurrentUsername() || Zotero.Prefs.get('sync.server.username') || "")
-			: "";
-		this.displayFields(username, {
-			emails: apiKey ? Zotero.Users.getCurrentEmails() : undefined
-		});
+		this.displayFields();
 	},
 
 
@@ -1198,28 +848,11 @@ Zotero_Preferences.Sync = {
 
 
 	_getActiveMetadataAPIKey: function () {
-		if (Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()) {
-			return Zotero.Sync.Metadata.getPostgreSQLAPIKey();
-		}
-		return Zotero.Sync.Data.Local.getAPIKey();
+		return Zotero.Sync.Metadata.getPostgreSQLAPIKey();
 	},
 
 
 	saveMetadataSyncSettings: async function ({ silent = false } = {}) {
-		let backend = document.getElementById('metadata-backend').value
-			|| Zotero.Sync.Metadata.BACKEND_ZOTERO;
-
-		if (backend == Zotero.Sync.Metadata.BACKEND_ZOTERO) {
-			await Zotero.Sync.Metadata.disablePostgreSQL();
-			await this._refreshAccountAndSyncUI();
-			if (!silent) {
-				this._setMetadataSyncStatus(this._formatMetadataMessage(
-					'preferences-sync-metadata-zotero-saved'
-				));
-			}
-			return true;
-		}
-
 		let urlField = document.getElementById('metadata-postgresql-url');
 		let url = urlField.value.trim();
 		if (!url) {
@@ -2215,12 +1848,10 @@ Zotero_Preferences.Sync = {
 			}
 			return Zotero.Prefs.get('sync.storage.protocol') == 'webdav'
 				? this._formatStorageMessage('preferences-sync-fileSyncing-default-global-webdav')
-				: this._formatStorageMessage('preferences-sync-fileSyncing-default-zotero-storage');
+				: this._formatStorageMessage('preferences-sync-fileSyncing-default-no-file-sync');
 		}
 		if (library.libraryType == 'group') {
-			return Zotero.Prefs.get('sync.storage.groups.enabled')
-				? this._formatStorageMessage('preferences-sync-fileSyncing-default-zotero-storage')
-				: this._formatStorageMessage('preferences-sync-fileSyncing-default-no-file-sync');
+			return this._formatStorageMessage('preferences-sync-fileSyncing-default-no-file-sync');
 		}
 		return this._formatStorageMessage('preferences-sync-fileSyncing-default');
 	},
@@ -2431,42 +2062,7 @@ Zotero_Preferences.Sync = {
 			}
 		}
 
-		if (oldProtocol == 'zotero' && newProtocol == 'webdav') {
-			var sql = "SELECT COUNT(*) FROM settings "
-				+ "WHERE setting='storage' AND key='zfsPurge' AND value='user'";
-			if (!Zotero.DB.valueQueryAsync(sql)) {
-				var account = Zotero.Sync.Server.username;
-				var index = Zotero.Prompt.confirm({
-					title: Zotero.getString('zotero.preferences.sync.purgeStorage.title'),
-					text: Zotero.getString('zotero.preferences.sync.purgeStorage.desc'),
-					button0: Zotero.getString('zotero.preferences.sync.purgeStorage.confirmButton'),
-					button1: Zotero.getString('zotero.preferences.sync.purgeStorage.cancelButton'),
-					buttonDelay: true,
-				});
 
-				if (index == 0) {
-					var sql = "INSERT OR IGNORE INTO settings VALUES (?,?,?)";
-					await Zotero.DB.queryAsync(sql, ['storage', 'zfsPurge', 'user']);
-
-					try {
-						await Zotero.Sync.Storage.ZFS.purgeDeletedStorageFiles();
-						Services.prompt.alert(
-							null,
-							Zotero.getString("general.success"),
-							"Attachment files from your personal library have been removed from the Zotero servers."
-						);
-					}
-					catch (e) {
-						Zotero.logError(e);
-						Services.prompt.alert(
-							null,
-							Zotero.getString("general.error"),
-							"An error occurred. Please try again later."
-						);
-					}
-				}
-			}
-		}
 
 		this.updateStorageSettingsUI();
 		this.storeLastStorageSettings();

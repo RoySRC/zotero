@@ -277,11 +277,11 @@ Zotero.Sync.Storage.Profiles = {
 			fileStorage: {
 				global: {
 					enabled: !!Zotero.Prefs.get('sync.storage.enabled'),
-					protocol: Zotero.Prefs.get('sync.storage.protocol') || '',
+					protocol: Zotero.Prefs.get('sync.storage.protocol') == 'webdav' ? 'webdav' : 'none',
 					scheme: Zotero.Prefs.get('sync.storage.scheme') || '',
 					url: Zotero.Prefs.get('sync.storage.url') || '',
 					username: Zotero.Prefs.get('sync.storage.username') || '',
-					groupsEnabled: !!Zotero.Prefs.get('sync.storage.groups.enabled'),
+					groupsEnabled: false,
 					downloadModePersonal: Zotero.Prefs.get('sync.storage.downloadMode.personal') || '',
 					downloadModeGroups: Zotero.Prefs.get('sync.storage.downloadMode.groups') || ''
 				},
@@ -334,8 +334,8 @@ Zotero.Sync.Storage.Profiles = {
 			if (global.enabled !== undefined) {
 				Zotero.Prefs.set('sync.storage.enabled', !!global.enabled);
 			}
-			if (global.protocol !== undefined && ['zotero', 'webdav', ''].includes(global.protocol)) {
-				Zotero.Prefs.set('sync.storage.protocol', global.protocol);
+			if (global.protocol !== undefined) {
+				Zotero.Prefs.set('sync.storage.protocol', global.protocol == 'webdav' ? 'webdav' : 'none');
 			}
 			if (global.scheme !== undefined && ['http', 'https', ''].includes(global.scheme)) {
 				Zotero.Prefs.set('sync.storage.scheme', global.scheme);
@@ -347,7 +347,7 @@ Zotero.Sync.Storage.Profiles = {
 				Zotero.Prefs.set('sync.storage.username', `${global.username || ''}`);
 			}
 			if (global.groupsEnabled !== undefined) {
-				Zotero.Prefs.set('sync.storage.groups.enabled', !!global.groupsEnabled);
+				Zotero.Prefs.set('sync.storage.groups.enabled', false);
 			}
 			if (global.downloadModePersonal !== undefined) {
 				Zotero.Prefs.set(

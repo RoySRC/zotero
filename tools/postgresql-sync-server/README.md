@@ -38,6 +38,16 @@ npm start
 
 The server listens on `http://localhost:23129/` by default.
 
+## PDF recognition
+
+The same HTTP service also hosts an authenticated, identifier-first PDF recognizer.
+Select **EpiLib** under **Settings > General > PDF Recognition** in the desktop
+client, then use **Verify Engine**. The initial engine identifies DOI, arXiv, and
+valid ISBN references; it does not yet provide OCR or title-only matching.
+
+See [RECOGNITION.md](RECOGNITION.md) for the request contract, beginner-oriented
+code walkthrough, privacy boundaries, tests, deployment, and extension guide.
+
 ## Tests
 
 ```sh

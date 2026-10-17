@@ -377,25 +377,7 @@ Zotero.Sync.Data.Local = {
 			return false;
 		}
 		
-		if (library.filesEditable
-				&& !filesEditable
-				&& !Zotero.Sync.Storage.Profiles.getWebDAVProfileForLibrary(libraryID)
-				&& ((await this._libraryHasUnsyncedFiles(libraryID)))) {
-			let index = Zotero.Sync.Storage.Utilities.showFileWriteAccessLostPrompt(win, library);
-			// Reset library files
-			if (index == 0) {
-				// This check happens before item data is loaded for syncing, so do it now,
-				// since the reset requires it
-				if (!library.getDataLoaded('item')) {
-					await library.waitForDataLoad('item');
-				}
-				await this.resetUnsyncedLibraryFiles(libraryID);
-				return true;
-			}
-			
-			// Skip library
-			return false;
-		}
+		// File-server access is determined by WebDAV, not metadata file-editing flags.
 		
 		return true;
 	},

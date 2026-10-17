@@ -1,0 +1,165 @@
+name: EpiLib Upstream Integration
+
+# Install this workflow on the default branch too: GitHub schedules only default-branch workflows.
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate and build without updating rebranding
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+concurrency:
+  group: epilib-upstream-rebranding
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.repository == 'RoySRC/zotero'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+      base: ${{ steps.merge.outputs.base }}
+      upstream: ${{ steps.merge.outputs.upstream }}
+      candidate: ${{ steps.candidate.outputs.sha }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: epilib_test
+          POSTGRES_PASSWORD: disposable-ci-password
+          POSTGRES_DB: epilib_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U epilib_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: rebranding
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Prepare detached candidate
+        id: merge
+        run: |
+          git config user.name "EpiLib Maintenance"
+          git config user.email "epilib-maintenance@users.noreply.github.com"
+          git checkout --detach HEAD
+          # Explicit public upstream; never infer it from origin in a fork.
+          git fetch --no-tags https://github.com/zotero/zotero.git main:refs/remotes/epilib-upstream/main
+          node tools/branding/merge-upstream.mjs
+      - name: Install build and test dependencies
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin zstd xvfb dbus-x11 libgtk-3-0 libx11-xcb1 libdbus-glib-1-2 libxt6
+          git submodule update --init --recursive
+          npm ci
+          npm ci --prefix tools/postgresql-sync-server
+      - name: Apply branding and enforce review checks
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          BASE: ${{ steps.merge.outputs.base }}
+        run: |
+          node tools/branding/apply.mjs --base "$BASE"
+          node tools/branding/check-upstream.mjs --base "$BASE"
+          git diff --check
+          node --test tools/branding/*.test.mjs
+          python3 tools/branding/test_integrations.py
+      - name: Commit candidate for validation
+        if: steps.merge.outputs.changed == 'true'
+        id: candidate
+        env:
+          BASE: ${{ steps.merge.outputs.base }}
+          UPSTREAM: ${{ steps.merge.outputs.upstream }}
+        run: |
+          # Freeze exactly the merge and reviewed overlay before the integration tests.
+          git add -u
+          git commit -m "Merge Zotero upstream with validated EpiLib branding"
+          test "$(git show -s --format=%P HEAD)" = "$BASE $UPSTREAM"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Authentication and metadata regressions (isolated database)
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          TEST_DATABASE_URL: postgres://epilib_test:disposable-ci-password@localhost:5432/epilib_test
+        run: npm test --prefix tools/postgresql-sync-server
+      - name: Build and test the candidate
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          NODE_OPTIONS: --openssl-legacy-provider
+        run: |
+          app/scripts/fetch_xulrunner -p l
+          npm run build
+          xvfb-run -a test/runtests.sh -f -b epilibBranding epilibSyncIsolation recognitionEngine preferences_account storageLocal webdav syncLocal syncEngine syncRunner
+          xvfb-run -a test/runtests.sh -f -b -g 'standalone PDF by ISBN' recognizeDocument
+          # Rebuild without the test harness and inspect the finished distributable.
+          app/scripts/dir_build -p l -f
+          python3 tools/branding/check-package.py app/staging/Zotero_linux-x86_64
+      - name: Seal the validated merge
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          BASE: ${{ steps.merge.outputs.base }}
+          UPSTREAM: ${{ steps.merge.outputs.upstream }}
+          CANDIDATE: ${{ steps.candidate.outputs.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(git show -s --format=%P HEAD)" = "$BASE $UPSTREAM"
+          test -z "$(git status --porcelain)"
+          # No profiles, logs, build outputs or credentials enter this Git-only artifact.
+          git update-ref refs/heads/epilib-upstream-candidate HEAD
+          git bundle create "$RUNNER_TEMP/epilib-candidate.bundle" refs/heads/epilib-upstream-candidate "^$BASE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.merge.outputs.changed == 'true'
+        with:
+          name: epilib-validated-candidate
+          path: ${{ runner.temp }}/epilib-candidate.bundle
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: integrate
+    if: >-
+      needs.integrate.outputs.changed == 'true'
+      && (github.event_name == 'schedule' || inputs.dry_run == false)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # Do not execute candidate code in this write-privileged job.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: rebranding
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: epilib-validated-candidate
+          path: ${{ runner.temp }}/epilib-candidate
+      - name: Fast-forward only the unchanged integration branch
+        env:
+          BASE: ${{ needs.integrate.outputs.base }}
+          UPSTREAM: ${{ needs.integrate.outputs.upstream }}
+          CANDIDATE: ${{ needs.integrate.outputs.candidate }}
+        run: |
+          [[ "$BASE" =~ ^[0-9a-f]{40}$ && "$UPSTREAM" =~ ^[0-9a-f]{40}$ && "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]]
+          git bundle verify "$RUNNER_TEMP/epilib-candidate/epilib-candidate.bundle"
+          git fetch "$RUNNER_TEMP/epilib-candidate/epilib-candidate.bundle" refs/heads/epilib-upstream-candidate
+          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE"
+          test "$(git show -s --format=%P "$CANDIDATE")" = "$BASE $UPSTREAM"
+          git fetch origin rebranding
+          test "$(git rev-parse FETCH_HEAD)" = "$BASE"
+          git merge-base --is-ancestor "$BASE" "$CANDIDATE"
+          # No force push, no protection bypass, and no release-branch updates.
+          git push origin "$CANDIDATE:refs/heads/rebranding"
+          echo "Integrated validated upstream commit $UPSTREAM into rebranding ($CANDIDATE)." >> "$GITHUB_STEP_SUMMARY"

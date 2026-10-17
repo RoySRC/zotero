@@ -43,6 +43,7 @@ test('bulk sync object updates', {
 	await pool.query(await readFile(new URL('../schema.sql', import.meta.url), 'utf8'));
 	const token = randomBytes(32).toString('hex');
 	await pool.query("INSERT INTO users (id, zotero_user_id, username) VALUES (1, 1234, 'sync-test')");
+	await pool.query("SELECT setval(pg_get_serial_sequence('users', 'id'), 1)");
 	await pool.query('INSERT INTO auth_tokens (user_id, token_hash) VALUES (1, $1)', [
 		createHash('sha256').update(token).digest('hex')
 	]);
@@ -85,6 +86,21 @@ test('bulk sync object updates', {
 		});
 	});
 	const baseURL = `http://127.0.0.1:${port}/groups/1234`;
+	await t.test('recognition uses the real database-backed token middleware', async () => {
+		let url = `http://127.0.0.1:${port}/recognizer/`;
+		assert.equal((await fetch(url + 'health')).status, 403);
+		assert.equal((await fetch(url + 'health', { headers: { 'Zotero-API-Key': 'invalid' } })).status, 403);
+		let health = await fetch(url + 'health', { headers: { 'Zotero-API-Key': token } });
+		assert.equal(health.status, 200);
+		assert.equal((await health.json()).engine, 'epilib');
+		let result = await fetch(url + 'recognize', {
+			method: 'POST',
+			headers: { 'Zotero-API-Key': token, 'Content-Type': 'application/json' },
+			body: JSON.stringify({ metadata: { DOI: '10.1234/test' }, totalPages: 1, pages: [] })
+		});
+		assert.equal(result.status, 200);
+		assert.deepEqual(await result.json(), { doi: '10.1234/test' });
+	});
 	async function write(target, data, method = 'POST') {
 		const response = await fetch(`${baseURL}/${target}`, {
 			method,
@@ -113,6 +129,44 @@ test('bulk sync object updates', {
 	}
 	let collection;
 	const relations = { 'owl:sameAs': 'https://example.org/collection' };
+	await t.test('per-user authentication, settings and password rotation survive upgrades', async () => {
+		const serverURL = `http://127.0.0.1:${port}`;
+		const password = randomBytes(24).toString('hex');
+		const newPassword = randomBytes(24).toString('hex');
+		const username = `branding-${randomBytes(6).toString('hex')}`;
+		async function auth(endpoint, body, expected) {
+			const response = await fetch(`${serverURL}/auth/${endpoint}`, {
+				method: 'POST', headers: {
+					'Content-Type': 'application/json',
+					...(endpoint === 'register' ? { 'Zotero-API-Key': token } : {})
+				}, body: JSON.stringify(body)
+			});
+			assert.equal(response.status, expected);
+			return response.json();
+		}
+		const account = await auth('register', { username, password }, 201);
+		await auth('login', { username, password: `${password}-wrong` }, 403);
+		const loggedIn = await auth('login', { username, password }, 200);
+		assert.equal(loggedIn.userID, account.userID);
+		const headers = { 'Zotero-API-Key': loggedIn.apiKey, 'Content-Type': 'application/json' };
+		const settings = { webdavProfiles: { test: { url: 'https://example.invalid/webdav', username: 'test' } } };
+		assert.equal((await fetch(`${serverURL}/sync/settings`, {
+			method: 'PUT', headers, body: JSON.stringify(settings)
+		})).status, 204);
+		const reloaded = await auth('login', { username, password }, 200);
+		assert.deepEqual(reloaded.syncSettings.webdavProfiles, settings.webdavProfiles);
+		assert.equal(reloaded.syncSettings.metadata.backend, 'postgresql');
+		const identity = await fetch(`${serverURL}/keys/current`, { headers });
+		assert.equal((await identity.json()).userID, account.userID);
+		const otherSettings = await fetch(`${serverURL}/sync/settings`, { headers: { 'Zotero-API-Key': token } });
+		assert.equal((await otherSettings.json()).webdavProfiles, undefined, 'Settings must remain per-user');
+		await auth('password', { username, oldPassword: 'incorrect', newPassword }, 403);
+		await auth('password', { username, oldPassword: password, newPassword }, 200);
+		await auth('login', { username, password }, 403);
+		await auth('login', { username, password: newPassword }, 200);
+		assert.equal((await fetch(`${serverURL}/keys/current`, { headers })).status, 403,
+			'Changing the password must revoke old tokens');
+	});
 	await t.test('trash and restore POST patches preserve collection metadata', async () => {
 		await save('collections', { key: 'PARENT01', name: 'Parent', parentCollection: false, relations: {} });
 		collection = await save('collections', {

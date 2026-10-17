@@ -149,7 +149,7 @@ var ZoteroPane = new function () {
 		
 		// Set the sync tooltip label
 		let syncLabel = document.getElementById('zotero-tb-sync-label');
-		syncLabel.value = Zotero.getString('sync.syncWith', ZOTERO_CONFIG.DOMAIN_NAME);
+		syncLabel.value = Zotero.getString('sync.syncWith', 'PostgreSQL');
 		let syncButton = document.querySelector("#zotero-tb-sync");
 		syncButton.setAttribute("aria-label", syncLabel.value);
 		// Update the aria-description on focus

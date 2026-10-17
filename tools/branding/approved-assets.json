@@ -1,0 +1,16 @@
+{
+  "app/linux/icons/icon128.png": "ed0696cf1b4729fd9f661cc72e5564ff6bfaecc69688fe50962eef82e198ed4f",
+  "app/linux/icons/icon64.png": "f1908b6689cd411e02b8950a5f53111c398b6f377448bbc41f227ce378e4d6a1",
+  "app/linux/icons/icon32.png": "a87e1dc40206c542541e378066a677f4dddc2847911464358dffc87f3a3ed6b7",
+  "app/linux/icons/symbolic.svg": "19ef519f77180153b888b609bb79bf53035197bdcc64de2852a23d6b94f7c06f",
+  "app/mac/Contents/Resources/epilib.icns": "691f5ab22abc517913ece1dcbbb635b1afd6380fa8dc3bb675efbabf900ae672",
+  "app/win/zotero.ico": "c1dd49930ebdd5fed114ea489478432124a347378cdbb459ed8ccf36079afc67",
+  "app/win/installer/setup.ico": "c1dd49930ebdd5fed114ea489478432124a347378cdbb459ed8ccf36079afc67",
+  "chrome/skin/default/zotero/z.svg": "19ef519f77180153b888b609bb79bf53035197bdcc64de2852a23d6b94f7c06f",
+  "chrome/skin/default/zotero/zotero.svg": "d6109ba51ea284edc1398d8af6a783708d5631d5484fdff936f14396500e2909",
+  "chrome/skin/default/zotero/zotero-new-z-16px.png": "667b0b9ea3207525e8ed2260fb6fed01f680450f82d2ede027f34d38072de1b6",
+  "chrome/skin/default/zotero/zotero-z-32px-australis.svg": "19ef519f77180153b888b609bb79bf53035197bdcc64de2852a23d6b94f7c06f",
+  "chrome/skin/default/zotero/zotero-z-32px-australis-mac.svg": "19ef519f77180153b888b609bb79bf53035197bdcc64de2852a23d6b94f7c06f",
+  "chrome/skin/default/zotero/zotero-z-32px-australis-unix.svg": "19ef519f77180153b888b609bb79bf53035197bdcc64de2852a23d6b94f7c06f",
+  "chrome/skin/default/zotero/zotero-z-32px-australis-win.svg": "19ef519f77180153b888b609bb79bf53035197bdcc64de2852a23d6b94f7c06f"
+}

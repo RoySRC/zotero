@@ -1,221 +1,63 @@
+/* global describe, beforeEach, afterEach, it, assert, sinon, loadPrefPane, waitForDialog */
 describe("Account Preferences", function () {
-	var win, doc;
-	before(function* () {
-		// Load prefs with sync pane
-		win = yield loadWindow("chrome://zotero/content/preferences/preferences.xhtml", {
-			pane: 'zotero-prefpane-account'
+	let win, doc, sandbox, apiKey, savedURL;
+
+	beforeEach(async function () {
+		sandbox = sinon.createSandbox();
+		apiKey = 'test-postgresql-token';
+		savedURL = Zotero.Prefs.get('sync.metadata.postgresql.url');
+		Zotero.Prefs.set('sync.metadata.postgresql.url', 'http://localhost:23129/');
+		sandbox.stub(Zotero.Sync.Metadata, 'getPostgreSQLAPIKey').callsFake(async () => apiKey);
+		sandbox.stub(Zotero.Sync.Metadata, 'hasPostgreSQLAPIKey').callsFake(async () => !!apiKey);
+		sandbox.stub(Zotero.Sync.Metadata, 'clearPostgreSQLAPIKey').callsFake(async () => {
+			apiKey = '';
 		});
+		sandbox.stub(Zotero.Users, 'getCurrentUsername').returns('Test User');
+		sandbox.stub(Zotero.Sync.Data.Local, 'getAPIKey').throws(new Error('Legacy account key read'));
+		sandbox.stub(Zotero.HTTP, 'request').rejects(new Error('Unexpected HTTP request'));
+		win = await loadPrefPane('account');
 		doc = win.document;
-		yield win.Zotero_Preferences.waitForFirstPaneLoad();
 	});
 
-	after(function () {
-		win.close();
+	afterEach(function () {
+		win?.close();
+		sandbox.restore();
+		Zotero.Prefs.set('sync.metadata.postgresql.url', savedURL);
 	});
 
-	describe("Settings", function () {
-		describe("Data Syncing", function () {
-			var createLoginSessionStub, checkLoginSessionStub, deleteAPIKey, launchURLStub,
-				streamerSubscribeStub, streamerUnsubscribeStub, indicatorElem, apiKey;
+	it("shows the PostgreSQL account and sync controls for a saved server token", async function () {
+		await win.Zotero_Preferences.Sync._refreshAccountAndSyncUI();
+		assert.equal(doc.getElementById('account-username').value, 'Test User');
+		assert.isFalse(doc.getElementById('account-log-out-button').hidden);
+		assert.isFalse(doc.getElementById('sync-settings-section').hidden);
+		assert.isTrue(doc.getElementById('sync-unauthorized').hidden);
+	});
 
-			var performLogin = async function (username) {
-				apiKey = Zotero.Utilities.randomString(24);
+	it("focuses the server login without opening a Zotero authorization page", async function () {
+		let launchURL = sandbox.stub(Zotero, 'launchURL');
+		await win.Zotero_Preferences.Sync.linkAccount();
+		assert.equal(doc.activeElement.id, 'metadata-postgresql-url');
+		assert.isFalse(launchURL.called);
+		assert.isFalse(Zotero.HTTP.request.called);
+	});
 
-				createLoginSessionStub.resolves({
-					sessionToken: 'test-session-token',
-					loginURL: 'https://www.zotero.org/authorize?token=test-session-token'
-				});
-				checkLoginSessionStub.resolves({
-					status: 'completed',
-					apiKey,
-					userID: 1,
-					username
-				});
+	it("logs out locally without deleting library data or contacting Zotero", async function () {
+		let version = Zotero.Libraries.userLibrary.libraryVersion;
+		let resetController = sandbox.spy(Zotero.Sync.Runner, 'resetStorageController');
+		await win.Zotero_Preferences.Sync.unlinkAccount(false);
+		assert.equal(apiKey, '');
+		assert.isTrue(resetController.calledWith('webdav'));
+		assert.isTrue(doc.getElementById('account-log-out-button').hidden);
+		assert.isFalse(doc.getElementById('metadata-postgresql-settings').hidden);
+		assert.equal(Zotero.Libraries.userLibrary.libraryVersion, version);
+		assert.isFalse(Zotero.HTTP.request.called);
+	});
 
-				await win.Zotero_Preferences.Sync.linkAccount();
-			};
-
-			before(function* () {
-				createLoginSessionStub = sinon.stub(
-					Zotero.Sync.APIClient.prototype, 'createLoginSession');
-				checkLoginSessionStub = sinon.stub(
-					Zotero.Sync.APIClient.prototype, 'checkLoginSession');
-				deleteAPIKey = sinon.stub(Zotero.Sync.APIClient.prototype, 'deleteAPIKey').resolves();
-				launchURLStub = sinon.stub(Zotero, 'launchURL');
-				streamerSubscribeStub = sinon.stub(Zotero.Streamer, 'subscribe').returns(false);
-				streamerUnsubscribeStub = sinon.stub(Zotero.Streamer, 'unsubscribe');
-				indicatorElem = doc.querySelector('.account-login-status-indicator');
-				sinon.stub(Zotero, 'alert');
-				// Speed up polling for tests
-				win.Zotero_Preferences.Sync._pollInterval = 10;
-			});
-
-			beforeEach(function* () {
-				yield win.Zotero_Preferences.Sync.unlinkAccount(false);
-				deleteAPIKey.resetHistory();
-				createLoginSessionStub.resetHistory();
-				checkLoginSessionStub.resetHistory();
-				launchURLStub.resetHistory();
-				streamerSubscribeStub.resetHistory();
-				streamerUnsubscribeStub.resetHistory();
-				Zotero.alert.reset();
-			});
-
-			after(function () {
-				Zotero.HTTP.mock = null;
-				Zotero.alert.restore();
-				createLoginSessionStub.restore();
-				checkLoginSessionStub.restore();
-				deleteAPIKey.restore();
-				launchURLStub.restore();
-				streamerSubscribeStub.restore();
-				streamerUnsubscribeStub.restore();
-				win.Zotero_Preferences.Sync._pollInterval = 3000;
-			});
-
-			it("should set API key and display full controls after successful login", async function () {
-				await performLogin("Username");
-
-				assert.equal(await Zotero.Sync.Data.Local.getAPIKey(), apiKey);
-				assert.isTrue(doc.getElementById('sync-unauthorized').hidden);
-				assert.isTrue(launchURLStub.calledOnce);
-			});
-
-
-			it("should show error when login session expires", async function () {
-				createLoginSessionStub.resolves({
-					sessionToken: 'test-session-token',
-					loginURL: 'https://www.zotero.org/authorize?token=test-session-token'
-				});
-				let expiredError = new Error("Login session expired");
-				expiredError.expired = true;
-				checkLoginSessionStub.rejects(expiredError);
-
-				await win.Zotero_Preferences.Sync.linkAccount();
-
-				assert.isTrue(Zotero.alert.called);
-				assert.equal(await Zotero.Sync.Data.Local.getAPIKey(), "");
-				assert.equal(doc.getElementById('sync-settings-section').hidden, true);
-			});
-
-
-			it("should reset UI when login session is cancelled on server", async function () {
-				createLoginSessionStub.resolves({
-					sessionToken: 'test-session-token',
-					loginURL: 'https://www.zotero.org/authorize?token=test-session-token'
-				});
-				checkLoginSessionStub.resolves({
-					status: 'cancelled'
-				});
-
-				await win.Zotero_Preferences.Sync.linkAccount();
-
-				assert.equal(await Zotero.Sync.Data.Local.getAPIKey(), "");
-				assert.equal(doc.querySelector('.account-login-default').hidden, false);
-				assert.equal(doc.querySelector('.account-login-pending').hidden, true);
-			});
-
-
-			it("should revoke the API key when it can't be stored locally", async function () {
-				var setAPIKeyStub = sinon.stub(Zotero.Sync.Data.Local, 'setAPIKey')
-					.rejects(new Error("User canceled OS unlock entry"));
-				try {
-					let e = await getPromiseError(performLogin("Username"));
-					assert.ok(e);
-					assert.isTrue(deleteAPIKey.calledOnce);
-					assert.equal(deleteAPIKey.firstCall.thisValue.apiKey, apiKey);
-					assert.equal(doc.querySelector('.account-login-default').hidden, false);
-					assert.equal(doc.querySelector('.account-login-pending').hidden, true);
-				}
-				finally {
-					setAPIKeyStub.restore();
-				}
-			});
-
-
-			it("should delete API key and display auth form when 'Unlink Account' clicked", async function () {
-				await performLogin("Username");
-				assert.equal(await Zotero.Sync.Data.Local.getAPIKey(), apiKey);
-
-				await win.Zotero_Preferences.Sync.unlinkAccount(false);
-
-				assert.isTrue(deleteAPIKey.called);
-				assert.equal(await Zotero.Sync.Data.Local.getAPIKey(), "");
-				assert.equal(doc.getElementById('sync-settings-section').hidden, true);
-			});
-
-			it("should reset the storage controller when unlinking", async function () {
-				await performLogin("Username");
-				assert.equal(await Zotero.Sync.Data.Local.getAPIKey(), apiKey);
-
-				let options = {
-					apiClient: Zotero.Sync.Runner.getAPIClient({ apiKey })
-				};
-				let controller = Zotero.Sync.Runner.getStorageController('zfs', options);
-				let apiKey1 = controller.apiClient.apiKey;
-
-				await win.Zotero_Preferences.Sync.unlinkAccount(false);
-				await performLogin("Username");
-
-				options = {
-					apiClient: Zotero.Sync.Runner.getAPIClient({ apiKey })
-				};
-				controller = Zotero.Sync.Runner.getStorageController('zfs', options);
-				assert.notEqual(controller.apiClient.apiKey, apiKey1);
-			});
-
-			it("should not unlink on pressing cancel", async function () {
-				await performLogin("Username");
-
-				waitForDialog(null, 'cancel');
-
-				await win.Zotero_Preferences.Sync.unlinkAccount();
-				assert.equal(await Zotero.Sync.Data.Local.getAPIKey(), apiKey);
-				assert.isTrue(doc.getElementById('sync-unauthorized').hidden);
-			});
-
-			it("should clear sync errors from the toolbar after logging in", async function () {
-				let win = await loadZoteroPane();
-
-				let syncError = win.document.getElementById('zotero-tb-sync-error');
-
-				Zotero.Sync.Runner.updateIcons(new Error("a sync error"));
-				assert.isFalse(syncError.hidden);
-
-				await performLogin("Username");
-				assert.isTrue(syncError.hidden);
-
-				win.close();
-			});
-
-			it("should cancel login and reset UI when cancelLogin is called", async function () {
-				let cancelLoginSessionStub = sinon.stub(
-					Zotero.Sync.APIClient.prototype, 'cancelLoginSession').resolves();
-
-				createLoginSessionStub.resolves({
-					sessionToken: 'test-session-token',
-					loginURL: 'https://www.zotero.org/authorize?token=test-session-token'
-				});
-				// Return "pending" so the poll loop keeps iterating
-				checkLoginSessionStub.resolves({ status: 'pending' });
-
-				// Start login but don't await -- it will keep polling
-				let loginPromise = win.Zotero_Preferences.Sync.linkAccount();
-
-				// Wait for the poll loop to start
-				await Zotero.Promise.delay(50);
-
-				win.Zotero_Preferences.Sync.cancelLogin();
-
-				// Wait for the login promise to resolve after cancellation
-				await loginPromise;
-
-				assert.equal(doc.querySelector('.account-login-default').hidden, false);
-				assert.equal(doc.querySelector('.account-login-pending').hidden, true);
-				assert.isTrue(cancelLoginSessionStub.calledWith('test-session-token'));
-
-				cancelLoginSessionStub.restore();
-			});
-		});
+	it("keeps the server token when logout is cancelled", async function () {
+		let dialog = waitForDialog(null, 'cancel');
+		await win.Zotero_Preferences.Sync.unlinkAccount();
+		await dialog;
+		assert.equal(apiKey, 'test-postgresql-token');
+		assert.isFalse(Zotero.HTTP.request.called);
 	});
 });

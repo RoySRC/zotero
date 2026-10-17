@@ -1,0 +1,70 @@
+{
+  "productName": "EpiLib",
+  "upstream": { "repository": "https://github.com/zotero/zotero.git", "branch": "main" },
+  "targetBranch": "rebranding",
+  "runtimeIdentity": {
+    "ID": "zotero",
+    "GUID": "zotero@zotero.org",
+    "PREF_BRANCH": "extensions.zotero.",
+    "DATA_DIRECTORY_NAME": "Zotero"
+  },
+  "externalResourceKeys": [
+    "install.quickStartGuide", "upgrade.nonupgradeableDB2", "dataDir.incompatibleDbVersion.text",
+    "errorReport.advanceMessage", "zotero.preferences.sync.purgeStorage.title",
+    "zotero.preferences.sync.reset.restoreFromServer", "sync.error.usernameNotSet.text",
+    "sync.error.invalidClock", "standalone.corruptInstallation", "addons.emptyListMessage"
+  ],
+  "externalFluentMessages": ["import-mendeley-cannot-decrypt", "import-mendeley-unsupported", "preferences-recognition-zotero"],
+  "protectedText": [
+    { "pattern": "(?:https?|chrome|resource|wss?):\\/\\/[^\\s<>\"']+", "reason": "External endpoints and resource URLs are not display names" },
+    { "pattern": "\\b[^\\s<>\"']+@[^\\s<>\"']+", "reason": "Email addresses and extension identities" },
+    { "pattern": "online Zotero library|Zotero\\s+(?:Storage|Forums|RDF|API|for Firefox|sync server|servers|services|account)\\b", "reason": "Actual upstream services and interoperable formats" },
+    { "pattern": "[\\w./-]*\\/Zotero(?:[\\/\\w.-]*)", "reason": "Existing profile and filesystem paths" }
+  ],
+  "referenceExceptions": [
+    { "file": "chrome/content/zotero/xpcom/error.js", "value": "Zotero Error", "reason": "Cross-window error dispatch identifier used by sync; not a display label" }
+  ],
+  "literalOverrides": {
+    "resource/config.mjs": [["CLIENT_NAME: 'Zotero'", "CLIENT_NAME: '{product}'"]],
+    "app/assets/branding/locale/brand.dtd": [["\"Zotero\"", "\"{product}\""]],
+    "app/assets/branding/locale/brand.properties": [["=Zotero", "={product}"]],
+    "app/assets/branding/locale/brand.ftl": [
+      ["-brand-shorter-name = Zotero\n", "-brand-shorter-name = {product}\n"],
+      ["-brand-short-name = Zotero\n", "-brand-short-name = {product}\n"],
+      ["-brand-full-name = Zotero\n", "-brand-full-name = {product}\n"],
+      ["-brand-product-name = Zotero\n", "-brand-product-name = {product}\n"],
+      ["-vendor-short-name = Zotero\n", "-vendor-short-name = {product}\n"],
+      ["-app-name = Zotero\n", "-app-name = {product}\n"]
+    ],
+    "app/linux/zotero.desktop": [["Name=Zotero", "Name={product}"]],
+    "app/win/installer/app.tag": [["Title=\"Zotero\"", "Title=\"{product}\""]],
+    "app/win/installer/defines.nsi": [["BrandShortName        \"Zotero\"", "BrandShortName        \"{product}\""]],
+    "chrome/content/zotero/locateMenu.js": [["Zotero Locate Engine Manager", "{product} Locate Engine Manager"]],
+    "chrome/content/zotero/zoteroPane.js": [["Zotero Restore", "{product} Restore"], ["local Zotero database", "local {product} database"]],
+    "chrome/content/zotero/xpcom/error.js": [["Zotero.Error.prototype.name = \"EpiLib Error\"", "Zotero.Error.prototype.name = \"Zotero Error\""]],
+    "chrome/content/zotero/xpcom/storage/storageLocal.js": [["your Zotero data", "your {product} data"]],
+    "chrome/content/zotero/xpcom/integration.js": [["your Zotero library", "your {product} library"]],
+    "chrome/content/zotero/xpcom/plugins.js": [["prevent Zotero from closing", "prevent {product} from closing"], ["the Zotero user interface", "the {product} user interface"]],
+    "tools/postgresql-sync-server/src/server.mjs": [["Zotero PostgreSQL sync server listening", "{product} PostgreSQL sync server listening"]],
+    "package.json": [["\"description\": \"Zotero\"", "\"description\": \"{product} research library\""]]
+  },
+  "requiredSourcePatterns": {
+    "resource/config.mjs": ["CLIENT_NAME: 'EpiLib'", "DATA_DIRECTORY_NAME: 'Zotero'"],
+    "chrome/content/zotero/xpcom/dataDirectory.js": ["ZOTERO_CONFIG.DATA_DIRECTORY_NAME"],
+    "chrome/content/zotero/xpcom/error.js": ["Zotero\\.Error\\.prototype\\.name = \"Zotero Error\""],
+    "app/assets/application.ini": ["^Name=Zotero$", "^Vendor=Zotero$", "^ID=zotero@zotero\\.org$", "^URL=https://www\\.zotero\\.org/download/client/update/"],
+    "app/assets/prefs.js": ["^pref\\(\"app\\.update\\.auto\", false\\);$"],
+    "app/assets/branding/locale/brand.properties": ["^brandShortName=EpiLib$", "^brandFullName=EpiLib$"],
+    "app/assets/branding/locale/brand.ftl": ["^-brand-full-name = EpiLib$"],
+    "app/mac/Contents/Info.plist": ["<key>CFBundleDisplayName</key>\\s*<string>EpiLib</string>", "<key>CFBundleIconFile</key>\\s*<string>epilib\\.icns</string>"],
+    "app/linux/zotero.desktop": ["^Name=EpiLib$", "x-scheme-handler/zotero"],
+    "app/win/installer/defines.nsi": ["BrandShortName\\s+\"EpiLib\""],
+    "app/win/installer/app.tag": ["Title=\"EpiLib\""],
+    "app/build.sh": ["APPDIR=\"\\$STAGE_DIR/EpiLib\\.app\"", "rebrand-integrations\\.py", "ln -s EpiLib\\.app"],
+    "js-build/reader.js": ["require\\('./branding'\\)"],
+    "js-build/note-editor.js": ["require\\('./branding'\\)"],
+    "chrome/content/zotero/about.xhtml": ["alt=\"EpiLib\"", "about\\.epilibFork", "about\\.createdBy"],
+    "chrome/content/zotero/xpcom/sync/syncMetadataServer.js": ["loginPostgreSQL"],
+    "chrome/content/zotero/xpcom/storage/storageProfiles.js": ["getWebDAVProfileForLibrary"]
+  }
+}

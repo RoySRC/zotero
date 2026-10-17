@@ -2254,55 +2254,9 @@ Zotero.Sync.Data.Engine.prototype._checkObjectUploadError = async function (obje
 		}
 	}
 	else if (code == 403) {
-		// If we get a 403 for a local group attachment, check the group permissions to confirm
-		// that we no longer have file-editing access and prompt to reset local group files
-		if (objectType == 'item') {
-			let item = Zotero.Items.getByLibraryAndKey(this.libraryID, key);
-			if (this.library.libraryType == 'group' && item.isFileAttachment()) {
-				let reset = false;
-				let groupID = Zotero.Groups.getGroupIDFromLibraryID(this.libraryID);
-				let info = await this.apiClient.getGroup(groupID);
-				if (info) {
-					Zotero.debug(info);
-					let { editable, filesEditable } = Zotero.Groups.getPermissionsFromJSON(
-						info.data, this.userID
-					);
-					// If we do still have file-editing access, something else went wrong,
-					// and we should just fail without resetting
-					if (!filesEditable) {
-						if (Zotero.Sync.Storage.Profiles.getWebDAVProfileForLibrary(this.libraryID)
-								&& !Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()) {
-							e.message = "zotero.org rejected attachment metadata because the group "
-								+ "does not allow Zotero Storage file editing. The assigned WebDAV "
-								+ "profile prevents local file resets, but attachment metadata sync "
-								+ "requires the PostgreSQL metadata backend.";
-							return false;
-						}
-
-						let index = Zotero.Sync.Storage.Utilities.showFileWriteAccessLostPrompt(
-							null, this.library
-						);
-						
-						let error = new Error(message);
-						if (index === 0) {
-							let group = Zotero.Groups.get(groupID);
-							group.filesEditable = false;
-							await group.saveTx();
-							
-							await Zotero.Sync.Data.Local.resetUnsyncedLibraryFiles(this.libraryID);
-							error.name = "ZoteroUploadRestartError";
-						}
-						else {
-							error.name = "ZoteroUploadCancelError";
-						}
-						throw error;
-					}
-				}
-				else {
-					Zotero.logError("Couldn't get metadata for group " + groupID);
-				}
-			}
-		}
+		// Metadata permission errors do not describe access to WebDAV files.
+		// Preserve the server error and local attachments for an explicit retry.
+		return false;
 	}
 	// This shouldn't happen, because the upload request includes a library version and should
 	// prevent an outdated upload before the object version is checked. If it does, we need to

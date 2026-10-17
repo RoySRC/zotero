@@ -4,35 +4,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { parse } = require('@fluent/syntax');
+const config = require('./config.json');
 const workspace = path.resolve(import.meta.dirname, '../../..');
 const write = process.argv.includes('--write');
 const repositories = ['zotero-desktop', 'zotero-connectors', 'zotero-ios', 'zotero-android'];
-const externalProperties = new Set([
-	'install.quickStartGuide', 'upgrade.nonupgradeableDB2', 'dataDir.incompatibleDbVersion.text',
-	'errorReport.advanceMessage', 'zotero.preferences.sync.purgeStorage.title',
-	'zotero.preferences.sync.reset.restoreFromServer', 'sync.error.usernameNotSet.text',
-	'sync.error.invalidClock', 'standalone.corruptInstallation', 'addons.emptyListMessage'
-]);
+const externalProperties = new Set(config.externalResourceKeys);
 
 export function brandText(value) {
 	const protectedText = [];
 	// These are external services, file formats or compatibility paths, not our product.
-	value = value.replace(/(?:https?|chrome|resource):\/\/[^\s<>"']+|\b[^\s<>"']+@[^\s<>"']+|online Zotero library|Zotero\s+(?:Storage|Forums|RDF|API|for Firefox|sync server|servers|services|account)\b|[\w./-]*\/Zotero(?:[\/\w.-]*)/g,
+	value = value.replace(new RegExp(config.protectedText.map(x => x.pattern).join('|'), 'g'),
 		match => `\u0000${protectedText.push(match) - 1}\u0000`);
-	value = value.replace(/Zotero(?![\w:/@-]|\.[\w])/g, 'EpiLib');
+	value = value.replace(/Zotero(?![\w:/@-]|\.[\w])/g, config.productName);
 	value = value.replace(/\b([Aa]) EpiLib\b/g, '$1n EpiLib');
 	return value.replace(/\u0000(\d+)\u0000/g, (_, index) => protectedText[index]);
 }
 
-function fluent(source) {
+export function fluent(source) {
 	const ast = parse(source, { withSpans: true });
 	const edits = [];
 	function visit(node) {
 		if (!node || typeof node !== 'object') return;
-		if (['import-mendeley-cannot-decrypt', 'import-mendeley-unsupported'].includes(node.id?.name)) return;
+		if (config.externalFluentMessages.includes(node.id?.name)) return;
 		if (node.type === 'TextElement') {
 			const value = brandText(node.value);
 			if (value !== node.value) edits.push([node.span.start, node.span.end, value]);
@@ -51,7 +48,22 @@ function fluent(source) {
 	return source;
 }
 
-for (const repo of repositories) {
+export function desktopResource(file, source) {
+	if (file.endsWith('.ftl')) return fluent(source);
+	if (file.endsWith('.properties')) {
+		return source.replace(/^([^#!\s][^=\n]*=)(.*)$/gm,
+			(_, key, value) => key + (key.startsWith('about.') || key.startsWith('sync.storage.error.zfs.')
+				|| externalProperties.has(key.slice(0, -1).trim()) ? value : brandText(value)));
+	}
+	if (file.endsWith('.dtd')) {
+		return source.replace(/(<!ENTITY\s+[^\s]+\s+")([^"]*)("\s*>)/g,
+			(_, prefix, value, suffix) => prefix + brandText(value) + suffix);
+	}
+	return source;
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+for (const repo of isMain ? repositories : []) {
 	const root = path.join(workspace, repo);
 	const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0');
 	let changed = 0;
@@ -64,16 +76,7 @@ for (const repo of repositories) {
 		const filename = path.join(root, file);
 		const original = fs.readFileSync(filename, 'utf8');
 		let result = original;
-		if (file.endsWith('.ftl')) result = fluent(original);
-		else if (file.endsWith('.properties')) {
-			result = original.replace(/^([^#!\s][^=\n]*=)(.*)$/gm,
-				(_, key, value) => key + (key.startsWith('about.') || key.startsWith('sync.storage.error.zfs.')
-					|| externalProperties.has(key.slice(0, -1).trim()) ? value : brandText(value)));
-		}
-		else if (file.endsWith('.dtd')) {
-			result = original.replace(/(<!ENTITY\s+[^\s]+\s+")([^"]*)("\s*>)/g,
-				(_, prefix, value, suffix) => prefix + brandText(value) + suffix);
-		}
+		if (/\.(ftl|properties|dtd)$/.test(file)) result = desktopResource(file, original);
 		else if (file.endsWith('.json')) {
 			JSON.parse(original);
 			result = original.replace(/("message"\s*:\s*)("(?:\\.|[^"\\])*")/g,

@@ -52,29 +52,13 @@ Zotero.Sync.Storage.Local = {
 		if (Zotero.Sync.Storage.Profiles.getModeForLibrary(libraryID)) {
 			return true;
 		}
-		var libraryType = Zotero.Libraries.get(libraryID).libraryType;
-		switch (libraryType) {
-		case 'user':
-			return Zotero.Prefs.get("sync.storage.enabled");
-		
-		// TEMP: Always sync publications files, at least until we have a better interface for
-		// setting library-specific settings
-		case 'publications':
-			return true;
-		
-		case 'group':
-			return Zotero.Prefs.get("sync.storage.groups.enabled");
-		
-		case 'feed':
-			return false;
-		
-		default:
-			throw new Error(`Unexpected library type '${libraryType}'`);
-		}
+		return this.getModeForLibrary(libraryID) == 'webdav'
+			&& Zotero.Prefs.get("sync.storage.enabled");
 	},
 	
 	getClassForLibrary: function (libraryID) {
-		return Zotero.Sync.Storage.Utilities.getClassForMode(this.getModeForLibrary(libraryID));
+		let mode = this.getModeForLibrary(libraryID);
+		return mode ? Zotero.Sync.Storage.Utilities.getClassForMode(mode) : null;
 	},
 	
 	getModeForLibrary: function (libraryID) {
@@ -86,13 +70,13 @@ Zotero.Sync.Storage.Local = {
 		var libraryType = Zotero.Libraries.get(libraryID).libraryType;
 		switch (libraryType) {
 		case 'user':
-			return Zotero.Prefs.get("sync.storage.protocol") == 'webdav' ? 'webdav' : 'zfs';
+			return Zotero.Prefs.get("sync.storage.protocol") == 'webdav' ? 'webdav' : null;
 		
 		case 'publications':
 		case 'group':
 		// TODO: Remove after making sure this is never called for feed libraries
 		case 'feed':
-			return 'zfs';
+			return null;
 		
 		default:
 			throw new Error(`Unexpected library type '${libraryType}'`);
@@ -108,7 +92,6 @@ Zotero.Sync.Storage.Local = {
 		
 		switch (mode) {
 		case 'webdav':
-		case 'zfs':
 			Zotero.Prefs.set("sync.storage.protocol", mode);
 			break;
 		

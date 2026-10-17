@@ -379,49 +379,22 @@ describe("Zotero.Sync.Data.Local", function () {
 			await Zotero.Sync.Data.Local.checkLibraryForAccess(null, libraryID, true, true);
 		});
 		
-		//
-		// filesEditable
-		//
-		it("should prompt if library is changing from filesEditable to non-filesEditable and reset library files on accept", async function () {
-			var group = await createGroup();
-			var libraryID = group.libraryID;
-			var promise = waitForDialog(function (dialog) {
-				var text = dialog.document.documentElement.textContent;
-				assert.include(text, group.name);
-			});
-			
-			var mock = sinon.mock(Zotero.Sync.Data.Local);
-			mock.expects("_libraryHasUnsyncedFiles").once().returns(Promise.resolve(true));
-			mock.expects("resetUnsyncedLibraryData").never();
-			mock.expects("resetUnsyncedLibraryFiles").once().returns(Promise.resolve());
-			
-			assert.isTrue(
-				await Zotero.Sync.Data.Local.checkLibraryForAccess(null, libraryID, true, false)
-			);
-			await promise;
-			
-			mock.verify();
-		});
-		
-		it("should prompt if library is changing from filesEditable to non-filesEditable but not reset library files on cancel", async function () {
-			var group = await createGroup();
-			var libraryID = group.libraryID;
-			var promise = waitForDialog(function (dialog) {
-				var text = dialog.document.documentElement.textContent;
-				assert.include(text, group.name);
-			}, "cancel");
-			
-			var mock = sinon.mock(Zotero.Sync.Data.Local);
-			mock.expects("_libraryHasUnsyncedFiles").once().returns(Promise.resolve(true));
-			mock.expects("resetUnsyncedLibraryData").never();
-			mock.expects("resetUnsyncedLibraryFiles").never();
-			
-			assert.isFalse(
-				await Zotero.Sync.Data.Local.checkLibraryForAccess(null, libraryID, true, false)
-			);
-			await promise;
-			
-			mock.verify();
+		it("should preserve local files when metadata file-editing permission changes", async function () {
+			let group = await createGroup();
+			let item = await importFileAttachment('test.png', { libraryID: group.libraryID });
+			let sandbox = sinon.createSandbox();
+			try {
+				let prompt = sandbox.stub(Zotero.Sync.Storage.Utilities, 'showFileWriteAccessLostPrompt');
+				let reset = sandbox.stub(Zotero.Sync.Data.Local, 'resetUnsyncedLibraryFiles');
+				assert.isTrue(await Zotero.Sync.Data.Local.checkLibraryForAccess(null, group.libraryID, true, false));
+				assert.isFalse(prompt.called);
+				assert.isFalse(reset.called);
+				assert.isTrue(await item.fileExists());
+			}
+			finally {
+				sandbox.restore();
+				await group.eraseTx({ skipDeleteLog: true });
+			}
 		});
 	});
 	
@@ -1123,7 +1096,7 @@ describe("Zotero.Sync.Data.Local", function () {
 		it("should mark new attachment items and library for download", async function () {
 			var library = Zotero.Libraries.userLibrary;
 			var libraryID = library.id;
-			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'zfs');
+			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'webdav');
 			
 			var key = Zotero.DataObjectUtilities.generateKey();
 			var version = 10;
@@ -1151,7 +1124,7 @@ describe("Zotero.Sync.Data.Local", function () {
 		it("should mark remotely updated attachment item for forced download", async function () {
 			var library = Zotero.Libraries.userLibrary;
 			var libraryID = library.id;
-			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'zfs');
+			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'webdav');
 			
 			var item = await importFileAttachment('test.png');
 			item.version = 5;
@@ -1181,7 +1154,7 @@ describe("Zotero.Sync.Data.Local", function () {
 		it("should mark remotely updated attachment item with missing file for download", async function () {
 			var library = Zotero.Libraries.userLibrary;
 			var libraryID = library.id;
-			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'zfs');
+			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'webdav');
 			
 			var item = await importFileAttachment('test.png');
 			item.version = 5;
@@ -1214,7 +1187,7 @@ describe("Zotero.Sync.Data.Local", function () {
 		it("should rename existing local file on remote filename change", async function () {
 			var library = Zotero.Libraries.userLibrary;
 			var libraryID = library.id;
-			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'zfs');
+			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'webdav');
 			
 			var item = await importFileAttachment('test.png');
 			item.version = 5;
@@ -1245,7 +1218,7 @@ describe("Zotero.Sync.Data.Local", function () {
 		
 		it("should ignore attachment metadata when resolving metadata conflict", async function () {
 			var libraryID = Zotero.Libraries.userLibraryID;
-			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'zfs');
+			Zotero.Sync.Storage.Local.setModeForLibrary(libraryID, 'webdav');
 			
 			var item = await importFileAttachment('test.png');
 			item.version = 5;

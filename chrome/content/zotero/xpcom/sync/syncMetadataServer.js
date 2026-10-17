@@ -28,9 +28,8 @@ if (!Zotero.Sync) {
 /**
  * Metadata-sync backend selection.
  *
- * WebDAV profiles remain file-storage backends. Metadata sync can use the
- * standard zotero.org API or a self-hosted PostgreSQL-backed API server that
- * implements the Zotero sync API surface used by Zotero.Sync.APIClient.
+ * EpiLib syncs metadata only with its PostgreSQL-backed API server.
+ * WebDAV profiles remain file-storage backends.
  */
 Zotero.Sync.Metadata = {
 	BACKEND_ZOTERO: 'zotero',
@@ -43,8 +42,8 @@ Zotero.Sync.Metadata = {
 	_loginManagerUsername: 'postgresql-metadata',
 
 	getBackend() {
-		let backend = Zotero.Prefs.get(this._backendPref) || this.BACKEND_ZOTERO;
-		return backend == this.BACKEND_POSTGRESQL ? backend : this.BACKEND_ZOTERO;
+		// Ignore legacy backend preferences without changing local library data.
+		return this.BACKEND_POSTGRESQL;
 	},
 
 	isPostgreSQLSyncEnabled() {
@@ -56,7 +55,7 @@ Zotero.Sync.Metadata = {
 		if (!url) {
 			return '';
 		}
-		return url.endsWith('/') ? url : url + '/';
+		return this.normalizePostgreSQLBaseURL(url);
 	},
 
 	async configurePostgreSQL(options = {}) {
@@ -477,7 +476,7 @@ Zotero.Sync.Metadata = {
 	},
 
 	async disablePostgreSQL() {
-		Zotero.Prefs.set(this._backendPref, this.BACKEND_ZOTERO);
+		Zotero.Prefs.set(this._backendPref, this.BACKEND_POSTGRESQL);
 		Zotero.Prefs.clear(this._postgreSQLURLPref);
 		await this.clearPostgreSQLAPIKey();
 	},
@@ -534,6 +533,14 @@ Zotero.Sync.Metadata = {
 	normalizePostgreSQLBaseURL(url) {
 		url = url.trim();
 		let parsedURL = new URL(url);
+		if (!['http:', 'https:'].includes(parsedURL.protocol)) {
+			throw new Error("PostgreSQL metadata server URL must start with http:// or https://");
+		}
+		let host = parsedURL.hostname.toLowerCase().replace(/\.$/, '');
+		if (host == 'zotero.org' || host.endsWith('.zotero.org')
+				|| host == 'zotero.net' || host.endsWith('.zotero.net')) {
+			throw new Error("Zotero account sync is not supported in EpiLib. Configure your PostgreSQL metadata server.");
+		}
 		let reservedLocalPort = `${Zotero.Prefs.get('httpServer.port') || 23119}`;
 		let hostname = parsedURL.hostname.toLowerCase();
 		if ((hostname == 'localhost' || hostname == '127.0.0.1' || hostname == '::1')

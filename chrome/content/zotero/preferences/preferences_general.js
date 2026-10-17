@@ -58,9 +58,75 @@ Zotero_Preferences.General = {
 		this._updateFileHandlerUI();
 		this._initEbookFontFamilyMenu();
 		this._initAutoDisableToolCheckbox();
+		this._initRecognitionUI();
 	},
 
 	uninit: function () {
+		if (this._recognitionURLObserver !== undefined) {
+			Zotero.Prefs.unregisterObserver(this._recognitionURLObserver);
+			delete this._recognitionURLObserver;
+		}
+		// Invalidate a pending verification when this pane is closed.
+		this._recognitionRevision++;
+	},
+
+	/**
+	 * Connect the native engine menu to preference binding in preferences.js.
+	 * Listening after synchronization covers both user choices and changes made by
+	 * another window. The server URL itself remains owned by Account Settings.
+	 */
+	_initRecognitionUI: function () {
+		this._recognitionRevision = 0;
+		let menu = document.getElementById('pdf-recognition-engine');
+		menu.addEventListener('syncfrompreference', () => this._updateRecognitionUI());
+		menu.addEventListener('synctopreference', () => this._updateRecognitionUI());
+		this._recognitionURLObserver = Zotero.Prefs.registerObserver(
+			'sync.metadata.postgresql.url', () => this._updateRecognitionUI());
+		this._updateRecognitionUI();
+	},
+
+	/** Refresh labels/state without sending a network request or uploading a PDF. */
+	_updateRecognitionUI: function () {
+		this._recognitionRevision++;
+		let epilib = Zotero.Prefs.get('recognize.engine') == 'epilib';
+		let status = document.getElementById('pdf-recognition-status');
+		document.getElementById('pdf-recognition-server').hidden = !epilib;
+		document.getElementById('pdf-recognition-verify').disabled = false;
+		document.getElementById('pdf-recognition-url').value = '';
+		status.textContent = '';
+		try {
+			let configuration = Zotero.RecognizeDocument.getRecognitionConfiguration();
+			if (epilib) document.getElementById('pdf-recognition-url').value = configuration.baseURL;
+		}
+		catch (e) {
+			status.textContent = e.message;
+			document.getElementById('pdf-recognition-verify').disabled = true;
+		}
+	},
+
+	/**
+	 * Check authentication and protocol compatibility with a document-free GET.
+	 * A revision guard discards late responses after a provider/server change or
+	 * window close, so a stale success cannot verify a newly selected destination.
+	 */
+	verifyRecognitionServer: async function () {
+		let revision = ++this._recognitionRevision;
+		let button = document.getElementById('pdf-recognition-verify');
+		let status = document.getElementById('pdf-recognition-status');
+		button.disabled = true;
+		status.textContent = Zotero.getString('recognition-verifying');
+		try {
+			await Zotero.RecognizeDocument.verifyRecognitionServer();
+			if (revision == this._recognitionRevision) {
+				status.textContent = Zotero.getString('recognition-verified');
+			}
+		}
+		catch (e) {
+			if (revision == this._recognitionRevision) status.textContent = e.message;
+		}
+		finally {
+			if (revision == this._recognitionRevision) button.disabled = false;
+		}
 	},
 
 	_getAutomaticLocaleMenuLabel: function () {

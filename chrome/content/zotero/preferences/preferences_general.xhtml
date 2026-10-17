@@ -110,6 +110,31 @@
 		
 		</groupbox>
 		
+		<groupbox id="pdf-recognition-group" aria-labelledby="pdf-recognition-heading">
+			<label><html:h2 id="pdf-recognition-heading" data-l10n-id="preferences-recognition-title"/></label>
+			<hbox align="center">
+				<label control="pdf-recognition-engine" data-l10n-id="preferences-recognition-engine"/>
+				<menulist id="pdf-recognition-engine" native="true"
+					preference="extensions.zotero.recognize.engine">
+					<menupopup>
+						<menuitem value="zotero" data-l10n-id="preferences-recognition-zotero"/>
+						<menuitem value="epilib" data-l10n-id="preferences-recognition-epilib"/>
+					</menupopup>
+				</menulist>
+			</hbox>
+			<vbox id="pdf-recognition-server" hidden="true">
+				<html:div class="recognition-server-row">
+					<html:label for="pdf-recognition-url" data-l10n-id="preferences-recognition-server"/>
+					<html:input id="pdf-recognition-url" type="text" readonly="readonly"/>
+				</html:div>
+				<hbox>
+					<button id="pdf-recognition-verify" data-l10n-id="preferences-recognition-verify"
+						oncommand="Zotero_Preferences.General.verifyRecognitionServer()"/>
+				</hbox>
+			</vbox>
+			<html:p id="pdf-recognition-status" role="status" aria-live="polite"/>
+		</groupbox>
+
 		<groupbox id="zotero-prefpane-file-renaming-groupbox" aria-labelledby="preferences-file-renaming-title" aria-describedby="preferences-file-renaming-intro">
 			<label><html:h2 id="preferences-file-renaming-title" data-l10n-id="preferences-file-renaming-title"/></label>
 

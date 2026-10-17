@@ -8,7 +8,7 @@ describe("Zotero.Sync.Storage.Local", function () {
 			Zotero.Prefs.set('sync.storage.groups.enabled', false);
 
 			try {
-				assert.equal(Zotero.Sync.Storage.Local.getModeForLibrary(group.libraryID), 'zfs');
+				assert.isNull(Zotero.Sync.Storage.Local.getModeForLibrary(group.libraryID));
 				assert.isFalse(Zotero.Sync.Storage.Local.getEnabledForLibrary(group.libraryID));
 
 				await Zotero.Sync.Storage.Profiles.setWebDAVProfile('project-a', {
@@ -37,7 +37,7 @@ describe("Zotero.Sync.Storage.Local", function () {
 					group.libraryID,
 					{ resetSyncState: false }
 				);
-				assert.equal(Zotero.Sync.Storage.Local.getModeForLibrary(group.libraryID), 'zfs');
+				assert.isNull(Zotero.Sync.Storage.Local.getModeForLibrary(group.libraryID));
 				assert.isFalse(Zotero.Sync.Storage.Local.getEnabledForLibrary(group.libraryID));
 			}
 			finally {

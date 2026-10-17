@@ -4,20 +4,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { assetSVG, loadAsset } from './assets.mjs';
 
 const workspace = path.resolve(import.meta.dirname, '../../..');
 const desktop = path.join(workspace, 'zotero-desktop');
-const icon = fs.readFileSync(path.join(import.meta.dirname, 'epilib-icon.svg'), 'utf8');
-const mark = fs.readFileSync(path.join(import.meta.dirname, 'epilib-mark.svg'), 'utf8');
-const wordmark = fs.readFileSync(path.join(import.meta.dirname, 'epilib-wordmark.svg'), 'utf8');
-const share = fs.readFileSync(path.join(import.meta.dirname, 'epilib-share.svg'), 'utf8');
+const compact = loadAsset('compact');
+const full = loadAsset('full');
+const mac = loadAsset('macos-compact');
+const share = fs.readFileSync(path.join(import.meta.dirname, 'epilib-share.svg'), 'utf8')
+	.replace('href="../../epilib-icons/compact.png"', `href="${compact.uri}"`);
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'epilib-brand-'));
 let count = 0;
 
 function render(filename, svg, width, height = width) {
-	const png = execFileSync('rsvg-convert', ['-w', String(width), '-h', String(height)], { input: svg });
+	const png = execFileSync('rsvg-convert', ['-w', String(width), '-h', String(height)], { input: svg, maxBuffer: 20e6 });
 	fs.writeFileSync(filename, png);
 	count++;
+}
+
+function renderAsset(filename, asset, width, height = width, options = {}) {
+	render(filename, assetSVG(asset, width, height, options), width, height);
 }
 
 try {
@@ -39,38 +45,45 @@ try {
 			const filename = path.join(root, file);
 			const png = fs.readFileSync(filename);
 			if (png.toString('ascii', 1, 4) !== 'PNG') throw new Error(`Missing PNG/LFS data: ${filename}`);
-			let svg = icon;
-			if (/Onboarding\/share|onboarding_share/.test(file)) svg = share;
-			else if (/Login\/logo/.test(file)) svg = wordmark.replace('context-fill', file.includes('inverted') ? '#ffffff' : '#12665c');
-			else if (/zotero-z-/.test(file)) svg = mark.replace('context-fill', file.includes('offline') ? '#888888' : '#12665c');
-			else if (repo === 'zotero-ios') svg = icon.replace('rx="216"', 'rx="0"');
-			render(filename, svg, png.readUInt32BE(16), png.readUInt32BE(20));
+			const width = png.readUInt32BE(16), height = png.readUInt32BE(20);
+			if (/Onboarding\/share|onboarding_share/.test(file)) {
+				render(filename, share, width, height);
+				continue;
+			}
+			const asset = /Login\/logo/.test(file) ? full
+				: repo === 'safari-web-extension' || file.endsWith('zotero-app-mac.png') ? mac : compact;
+			const options = /AppIcon\.appiconset/.test(file) ? { background: '#ffffff' } : {};
+			renderAsset(filename, asset, width, height, options);
 		}
 	}
 	for (const name of ['z.svg', 'zotero-z-32px-australis.svg', 'zotero-z-32px-australis-mac.svg', 'zotero-z-32px-australis-unix.svg', 'zotero-z-32px-australis-win.svg']) {
-		fs.writeFileSync(path.join(desktop, 'chrome/skin/default/zotero', name), mark.replace('context-fill', '#12665c'));
+		fs.writeFileSync(path.join(desktop, 'chrome/skin/default/zotero', name), assetSVG(compact, 32));
 	}
-	fs.writeFileSync(path.join(desktop, 'chrome/skin/default/zotero/zotero.svg'), wordmark);
-	fs.writeFileSync(path.join(desktop, 'app/linux/icons/symbolic.svg'), mark.replace('context-fill', '#000000'));
-	fs.writeFileSync(path.join(workspace, 'zotero-ios/Zotero/Assets/Assets.xcassets/launch_z.imageset/launch_z.svg'), mark.replace('context-fill', '#12665c'));
+	fs.writeFileSync(path.join(desktop, 'chrome/skin/default/zotero/zotero.svg'), assetSVG(full, 272, 101));
+	fs.writeFileSync(path.join(desktop, 'app/linux/icons/symbolic.svg'), assetSVG(compact, 32));
+	renderAsset(path.join(workspace, 'zotero-ios/Zotero/Assets/Assets.xcassets/launch_z.imageset/launch_z.png'), compact, 512);
 	const iosIcon = path.join(workspace, 'zotero-ios/Zotero/Assets/AppIcon.icon');
-	fs.writeFileSync(path.join(iosIcon, 'Assets/epilib.svg'), mark.replace('context-fill', '#ffffff'));
+	renderAsset(path.join(iosIcon, 'Assets/epilib.png'), compact, 1024, 1024, { background: '#ffffff' });
 	fs.writeFileSync(path.join(iosIcon, 'icon.json'), JSON.stringify({
-		'fill-specializations': [{ value: { solid: 'srgb:0.07059,0.40000,0.36078,1.00000' } }],
-		groups: [{ layers: [{ 'image-name': 'epilib.svg', name: 'EpiLib', 'glass-specializations': [{ value: false }] }],
+		'fill-specializations': [{ value: { solid: 'srgb:1.00000,1.00000,1.00000,1.00000' } }],
+		groups: [{ layers: [{ 'image-name': 'epilib.png', name: 'EpiLib', 'glass-specializations': [{ value: false }] }],
 			position: { scale: 0.72, 'translation-in-points': [0, 0] } }],
 		'supported-platforms': { circles: ['watchOS'], squares: 'shared' }
 	}, null, 2) + '\n');
+	const androidDrawables = path.join(workspace, 'zotero-android/app/src/main/res/drawable-nodpi');
+	fs.mkdirSync(androidDrawables, { recursive: true });
+	renderAsset(path.join(androidDrawables, 'epilib_launcher_foreground.png'), compact, 432, 432,
+		{ padding: 92, background: '#ffffff' });
 	const iconset = path.join(temp, 'epilib.iconset');
 	fs.mkdirSync(iconset);
 	for (const size of [16, 32, 128, 256, 512]) {
-		render(path.join(iconset, `icon_${size}x${size}.png`), icon, size);
-		render(path.join(iconset, `icon_${size}x${size}@2x.png`), icon, size * 2);
+		renderAsset(path.join(iconset, `icon_${size}x${size}.png`), mac, size);
+		renderAsset(path.join(iconset, `icon_${size}x${size}@2x.png`), mac, size * 2);
 	}
 	execFileSync('iconutil', ['-c', 'icns', iconset, '-o', path.join(desktop, 'app/mac/Contents/Resources/epilib.icns')]);
 	// ICO supports PNG-compressed entries. Include each common Windows scaling size.
 	const images = [16, 24, 32, 48, 64, 128, 256].map(size => ({ size,
-		data: execFileSync('rsvg-convert', ['-w', String(size), '-h', String(size)], { input: icon }) }));
+		data: execFileSync('rsvg-convert', ['-w', String(size), '-h', String(size)], { input: assetSVG(compact, size) }) }));
 	const header = Buffer.alloc(6 + images.length * 16);
 	header.writeUInt16LE(1, 2);
 	header.writeUInt16LE(images.length, 4);

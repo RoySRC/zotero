@@ -37,4 +37,17 @@
 		visibility: hidden;
 	}
 }
+#pdf-recognition-group {
+	#pdf-recognition-server[hidden] { display: none; }
+	.recognition-server-row {
+		display: grid;
+		grid-template-columns: max-content minmax(0, 1fr);
+		align-items: center;
+		gap: 8px;
+		margin-block: 8px;
+	}
+	#pdf-recognition-url { width: 100%; min-width: 0; box-sizing: border-box; }
+	#pdf-recognition-status { overflow-wrap: anywhere; }
+	#pdf-recognition-status:empty { display: none; }
+}
 

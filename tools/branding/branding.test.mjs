@@ -40,6 +40,14 @@ test('runtime profile identity and update endpoints remain unchanged', () => {
 	assert.match(ini, /^URL=https:\/\/www\.zotero\.org\/download\/client\/update\//m);
 });
 
+test('error dispatch keeps its compatibility name across the display-name change', () => {
+	const context = vm.createContext({ Zotero: {} });
+	vm.runInContext(fs.readFileSync(new URL('../../chrome/content/zotero/xpcom/error.js', import.meta.url), 'utf8'), context);
+	const error = new context.Zotero.Error('Expired key', context.Zotero.Error.ERROR_API_KEY_INVALID);
+	assert.equal(error.name, 'Zotero Error');
+	assert.equal(error.error, context.Zotero.Error.ERROR_API_KEY_INVALID);
+});
+
 test('desktop and iOS bundle title overlays preserve script paths and are idempotent', async () => {
 	const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'epilib-titles-'));
 	try {
@@ -53,10 +61,12 @@ test('desktop and iOS bundle title overlays preserve script paths and are idempo
 		assert.equal(fs.readFileSync(file, 'utf8'), expected);
 		fs.writeFileSync(file, original);
 		const script = new URL('../../../zotero-ios/scripts/rebrand-bundle.sh', import.meta.url);
-		// This is a workspace migration test; the sibling iOS source is part of its scope.
-		execFileSync('bash', [script.pathname, folder]);
-		execFileSync('bash', [script.pathname, folder]);
-		assert.equal(fs.readFileSync(file, 'utf8'), expected);
+		// Standalone desktop CI does not check out the separate mobile repository.
+		if (fs.existsSync(script)) {
+			execFileSync('bash', [script.pathname, folder]);
+			execFileSync('bash', [script.pathname, folder]);
+			assert.equal(fs.readFileSync(file, 'utf8'), expected);
+		}
 	}
 	finally { fs.rmSync(folder, { recursive: true, force: true }); }
 });

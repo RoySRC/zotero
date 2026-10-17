@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import pg from 'pg';
+import { createRecognizerRouter } from './recognizer-routes.mjs';
 
 const { Pool } = pg;
 
@@ -23,7 +24,6 @@ if (!DATABASE_URL) {
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 const app = express();
-app.use(express.json({ limit: '25mb' }));
 app.use((req, res, next) => {
 	let started = Date.now();
 	res.on('finish', () => {
@@ -77,6 +77,11 @@ app.use(asyncHandler(async (req, res, next) => {
 	req.authUser = user;
 	next();
 }));
+
+app.use('/recognizer', createRecognizerRouter());
+// Recognition has already applied its smaller limit after authentication. Other
+// sync/auth routes retain their existing JSON limit and request-body contract.
+app.use(express.json({ limit: '25mb' }));
 
 app.get('/health', (_req, res) => {
 	res.json({ ok: true });

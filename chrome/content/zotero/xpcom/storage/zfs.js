@@ -27,15 +27,8 @@ if (!Zotero.Sync.Storage.Mode) {
 	Zotero.Sync.Storage.Mode = {};
 }
 
-Zotero.Sync.Storage.Mode.ZFS = function (options) {
-	this.options = options;
-	this.apiClient = options.apiClient;
-	
-	this._s3Backoff = 1;
-	this._s3ConsecutiveFailures = 0;
-	this._maxS3Backoff = 60;
-	this._maxS3ConsecutiveFailures = options.maxS3ConsecutiveFailures !== undefined
-		? options.maxS3ConsecutiveFailures : 5;
+Zotero.Sync.Storage.Mode.ZFS = function () {
+	throw new Error("Zotero attachment storage is not supported in EpiLib");
 };
 Zotero.Sync.Storage.Mode.ZFS.prototype = {
 	mode: "zfs",

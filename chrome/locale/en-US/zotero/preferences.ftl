@@ -6,6 +6,28 @@ preferences-appearance-title = Appearance and Language
 preferences-auto-recognize-files =
     .label = Automatically retrieve metadata for PDFs and ebooks
 
+preferences-recognition-title = PDF Recognition
+preferences-recognition-engine = Engine:
+# Zotero is the name of an external service, not this application's brand.
+preferences-recognition-zotero =
+    .label = Zotero
+preferences-recognition-epilib =
+    .label = EpiLib
+preferences-recognition-server = Server:
+preferences-recognition-verify =
+    .label = Verify Engine
+recognition-verifying = Verifying recognition server...
+recognition-verified = EpiLib recognition server verified.
+recognition-server-required = Configure your PostgreSQL server in Account Settings first.
+recognition-login-required = Log in to your PostgreSQL server in Account Settings first.
+recognition-server-changed = The recognition server changed during this operation. Please try again.
+recognition-engine-invalid = Select a supported PDF recognition engine in General Settings.
+recognition-url-invalid = The recognition URL must use HTTP or HTTPS without embedded credentials, a query, or a fragment.
+recognition-access-denied = The recognition server rejected your credentials. Check your account login.
+recognition-request-failed = The selected recognition server could not complete the request. Check the connection and confirm that this server supports PDF recognition.
+recognition-response-invalid = The selected server did not return a supported PDF recognition response.
+recognition-feedback-unavailable = Feedback is unavailable for this recognition result. No document was sent.
+
 preferences-file-renaming-title = File Renaming
 preferences-file-renaming-intro =
     { -app-name } can automatically rename files based on the details of the parent item (title, author, etc.) and keep the filenames in sync as you make changes. Downloaded files are always initially named based on the parent item.
@@ -115,7 +137,7 @@ preferences-sync-settings-heading = Sync
 preferences-sync-settings-intro = { -app-name } can sync your library data and files across devices. <label data-l10n-name="sync-link">Learn more</label>
 preferences-sync-reset-heading = Sync Reset
 preferences-sync-metadata-heading = Metadata Sync
-preferences-sync-metadata-description = Choose where library metadata, collections, tags, and attachment records are synced. Attachment files can still use Zotero Storage or WebDAV profiles.
+preferences-sync-metadata-description = Library metadata syncs with your PostgreSQL server. Attachment files sync with WebDAV.
 preferences-sync-metadata-backend =
     .value = Metadata backend:
 preferences-sync-metadata-backend-zotero =
@@ -125,7 +147,7 @@ preferences-sync-metadata-backend-postgresql =
 preferences-sync-metadata-save =
     .label = Save
 preferences-sync-metadata-zotero-saved = Metadata sync will use zotero.org.
-preferences-sync-metadata-postgresql-active = Metadata sync is using a PostgreSQL server. Configure the server below.
+preferences-sync-metadata-postgresql-active = Configure your PostgreSQL server account below.
 preferences-sync-metadata-postgresql-url =
     .value = Server URL:
 preferences-sync-metadata-postgresql-url-placeholder =
@@ -228,6 +250,8 @@ preferences-sync-fileSyncing-default = Default
 preferences-sync-fileSyncing-default-no-file-sync = Default (No file sync)
 preferences-sync-fileSyncing-default-global-webdav = Default (Global WebDAV)
 preferences-sync-fileSyncing-default-zotero-storage = Default ({ -app-name } Storage)
+preferences-sync-fileSyncing-none =
+    .label = No file sync
 preferences-sync-fileSyncing-webDAVProjects-title = WebDAV Project Libraries
 preferences-sync-fileSyncing-webDAVProjects-description = Create local project libraries whose files sync through WebDAV. Metadata sync uses the configured metadata backend.
 preferences-sync-fileSyncing-webDAVProject-name =

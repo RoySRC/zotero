@@ -3,7 +3,7 @@
 describe("Zotero.Sync.Runner", function () {
 	var apiKey = Zotero.Utilities.randomString(24);
 	var baseURL = "http://local.zotero/";
-	var userLibraryID, runner, caller, server, stub, spy;
+	var userLibraryID, runner, caller, server, stub, spy, storageEnabled;
 	
 	var responses = {
 		keyInfo: {
@@ -170,6 +170,9 @@ describe("Zotero.Sync.Runner", function () {
 	//
 	beforeEach(function* () {
 		yield resetData();
+		storageEnabled = Zotero.Prefs.get('sync.storage.enabled');
+		// These are metadata orchestration tests; WebDAV transfers have their own suite.
+		Zotero.Prefs.set('sync.storage.enabled', false);
 		
 		userLibraryID = Zotero.Libraries.userLibraryID;
 		
@@ -198,6 +201,7 @@ describe("Zotero.Sync.Runner", function () {
 		yield Zotero.Users.setCurrentUsername("A");
 	})
 	afterEach(function () {
+		Zotero.Prefs.set('sync.storage.enabled', storageEnabled);
 		if (stub) stub.restore();
 		if (spy) spy.restore();
 	})
@@ -970,68 +974,24 @@ describe("Zotero.Sync.Runner", function () {
 	
 	
 	describe("#createAPIKeyFromCredentials()", function () {
-		var data = {
-			name: "Automatic Zotero Client Key",
-			username: "Username",
-			access: {
-				user: {
-					library: true,
-					files: true,
-					notes: true,
-					write: true
-				},
-				groups: {
-					all: {
-						library: true,
-						write: true
-					}
-				}
-			}
-		};
-		var correctPostData = Object.assign({password: 'correctPassword'}, data);
-		var incorrectPostData = Object.assign({password: 'incorrectPassword'}, data);
-		var responseData = Object.assign({userID: 1, key: apiKey}, data);
-
-		it("should return json with key when credentials valid", async function () {
-			server.respond(function (req) {
-				if (req.method == "POST") {
-					var json = JSON.parse(req.requestBody);
-					assert.deepEqual(json, correctPostData);
-					req.respond(201, {}, JSON.stringify(responseData));
-				}
-			});
-
-			var json = await runner.createAPIKeyFromCredentials('Username', 'correctPassword');
-			assert.equal(json.key, apiKey);
-		});
-
-		it("should return false when credentials invalid", async function () {
-			server.respond(function (req) {
-				if (req.method == "POST") {
-					var json = JSON.parse(req.requestBody);
-					assert.deepEqual(json, incorrectPostData);
-					req.respond(403);
-				}
-			});
-
-			var key = await runner.createAPIKeyFromCredentials('Username', 'incorrectPassword');
-			assert.isFalse(key);
+		it("rejects Zotero login without making a network request", async function () {
+			let error = await getPromiseError(runner.createAPIKeyFromCredentials('Username', 'password'));
+			assert.include(error.message, 'not supported');
+			assert.lengthOf(server.requests, 0);
 		});
 	});
 
 	describe("#deleteAPIKey()", function () {
-		it("should send DELETE request with correct key", async function () {
-			Zotero.Sync.Data.Local.setAPIKey(apiKey);
-
-			server.respond(function (req) {
-				if (req.method == "DELETE") {
-					assert.propertyVal(req.requestHeaders, 'Zotero-API-Key', apiKey);
-					assert.equal(req.url, baseURL + "keys/current");
-				}
-				req.respond(204);
-			});
-
-			await runner.deleteAPIKey();
+		it("clears the PostgreSQL token locally without contacting Zotero", async function () {
+			let clearKey = sinon.stub(Zotero.Sync.Metadata, 'clearPostgreSQLAPIKey').resolves();
+			try {
+				await runner.deleteAPIKey();
+				assert.isTrue(clearKey.calledOnce);
+				assert.lengthOf(server.requests, 0);
+			}
+			finally {
+				clearKey.restore();
+			}
 		});
 	});
 	

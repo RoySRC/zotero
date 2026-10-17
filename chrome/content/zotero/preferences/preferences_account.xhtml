@@ -24,31 +24,7 @@
 -->
 <vbox id="zotero-prefpane-account" onload="Zotero_Preferences.Sync.init()">
 	<vbox class="main-section">
-		<vbox id="sync-unauthorized">
-			<description data-l10n-id="preferences-sync-data-syncing-description"/>
-
-			<hbox>
-				<vbox>
-					<hbox class="account-login-default">
-						<button data-l10n-id="preferences-account-log-in"
-							oncommand="Zotero_Preferences.Sync.linkAccount(event)"/>
-					</hbox>
-					<hbox class="account-login-pending" hidden="true" align="center">
-						<label class="account-login-status-indicator"/>
-						<label data-l10n-id="preferences-account-waiting-for-login"/>
-						<button data-l10n-id="preferences-account-cancel-button"
-							oncommand="Zotero_Preferences.Sync.cancelLogin()"/>
-					</hbox>
-				</vbox>
-
-				<vbox style="width:2em"/>
-				<vbox>
-					<label is="zotero-text-link" value="&zotero.preferences.sync.createAccount;" href="http://zotero.org/user/register"/>
-					<separator class="thin"/>
-					<label is="zotero-text-link" value="&zotero.preferences.sync.about;" href="http://www.zotero.org/support/sync"/>
-				</vbox>
-			</hbox>
-		</vbox>
+		<vbox id="sync-unauthorized" hidden="true"/>
 
 		<vbox id="sync-postgresql-linked" hidden="true">
 			<description data-l10n-id="preferences-sync-metadata-postgresql-active"/>
@@ -108,8 +84,6 @@
 						oncommand="Zotero_Preferences.Sync.onMetadataBackendChange()"
 						native="true">
 						<menupopup>
-							<menuitem data-l10n-id="preferences-sync-metadata-backend-zotero"
-								value="zotero"/>
 							<menuitem data-l10n-id="preferences-sync-metadata-backend-postgresql"
 								value="postgresql"/>
 						</menupopup>
@@ -278,7 +252,7 @@
 						oncommand="Zotero_Preferences.Sync.onStorageSettingsChange()"
 						native="true">
 						<menupopup>
-							<menuitem label="Zotero Storage" value="zotero"/>
+							<menuitem data-l10n-id="preferences-sync-fileSyncing-none" value="none"/>
 							<menuitem label="WebDAV" value="webdav"/>
 						</menupopup>
 					</menulist>
@@ -499,11 +473,6 @@
 				<separator id="storage-separator" class="thin"/>
 
 				<!-- Group Libraries -->
-				<checkbox id="storage-groups-zotero-storage-option"
-					data-l10n-id="preferences-sync-fileSyncing-groups"
-					preference="extensions.zotero.sync.storage.groups.enabled"
-					oncommand="Zotero_Preferences.Sync.updateStorageSettingsGroupsUI()"
-					native="true"/>
 
 				<hbox class="storage-settings-download-options" align="center">
 					<label control="storage-groups-download-mode" value="&zotero.preferences.sync.fileSyncing.download;"/>
@@ -521,11 +490,7 @@
 
 				<separator class="thin"/>
 
-				<vbox id="storage-terms">
-					<description style="margin-top: .4em" data-l10n-id="preferences-sync-fileSyncing-tos">
-						<label is="zotero-text-link" href="https://www.zotero.org/support/terms/terms_of_service" data-l10n-name="terms-link"/>
-					</description>
-				</vbox>
+				<vbox id="storage-terms" hidden="true"/>
 		</groupbox>
 	</vbox>
 

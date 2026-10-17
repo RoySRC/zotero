@@ -17,8 +17,10 @@ replace(desktop, 'chrome/content/zotero/locateMenu.js', [['Zotero Locate Engine 
 replace(desktop, 'chrome/content/zotero/zoteroPane.js', [
 	['Zotero Restore', 'EpiLib Restore'], ['local Zotero database', 'local EpiLib database']
 ]);
-replace(desktop, 'chrome/content/zotero/xpcom/error.js', [['"Zotero Error"', '"EpiLib Error"']]);
-replace(desktop, 'chrome/content/zotero/xpcom/sync/syncRunner.js', [['"Zotero Error"', '"EpiLib Error"']]);
+// Error names are dispatch identifiers, even though they can appear in debug logs.
+replace(desktop, 'chrome/content/zotero/xpcom/error.js', [
+	['Zotero.Error.prototype.name = "EpiLib Error"', 'Zotero.Error.prototype.name = "Zotero Error"']
+]);
 replace(desktop, 'chrome/content/zotero/xpcom/storage/storageLocal.js', [
 	['your Zotero data', 'your EpiLib data']
 ]);
