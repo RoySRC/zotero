@@ -46,3 +46,23 @@ test('unconfigured, failed, redirected and malformed workers never fall back to 
 		assert.ok(!(await result.text()).includes('private'));
 	}
 });
+
+test('gateway forwards per-request provider keys only to its authenticated worker', async t => {
+	const bodies = [];
+	const base = await gateway(t, { url: 'http://worker:8080/', key: '0'.repeat(32),
+		fetchImpl: async (_url, options) => {
+			bodies.push(options.body && JSON.parse(options.body));
+			return Response.json({ engine: 'epilib', version: 2, providerCredentials: 1 });
+		} });
+	const headers = { 'Zotero-API-Key': 'user-token', 'Content-Type': 'application/json' };
+	assert.equal((await (await fetch(base + 'health', { headers })).json()).providerCredentials, 1);
+	for (const providerKeys of [{ crossref: 'synthetic-personal-key' }, undefined]) {
+		const payload = { pages: [], ...(providerKeys ? { providerKeys } : {}) };
+		const response = await fetch(base + 'recognize', { method: 'POST', headers, body: JSON.stringify(payload) });
+		assert.equal(response.status, 200);
+		assert.deepEqual(bodies.at(-1), payload);
+		assert.ok(!(await response.text()).includes('synthetic-personal-key'));
+	}
+	assert.equal(bodies.length, 3);
+	assert.equal(bodies[0], undefined);
+});

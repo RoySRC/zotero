@@ -34,9 +34,11 @@ pref("extensions.zotero.fontSize", "1.00");
 pref("extensions.zotero.layout", "standard");
 pref("extensions.zotero.recursiveCollections", false);
 pref("extensions.zotero.autoRecognizeFiles", true);
-// Preserve the existing provider until a user explicitly selects their EpiLib server.
+// Preserve the existing provider until a user selects the bundled EpiLib engine.
 pref("extensions.zotero.recognize.engine", "zotero");
-// An empty override follows the authenticated recognition gateway in Account Settings.
+pref("extensions.zotero.recognize.repository.enabled", true);
+pref("extensions.zotero.recognize.repository.contribute", false);
+// Legacy HTTP adapter/credential scope; bundled recognition does not contact this URL.
 pref("extensions.zotero.recognize.epilib.url", "");
 pref("extensions.zotero.recognize.grobid.enabled", false);
 pref("extensions.zotero.recognize.grobid.url", "http://127.0.0.1:8070/");

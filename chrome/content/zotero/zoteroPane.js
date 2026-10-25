@@ -4752,7 +4752,9 @@ var ZoteroPane = new function () {
 		menu.childNodes[m.loadReport].setAttribute('label', Zotero.getString('pane.items.menu.generateReport' + multiple));
 		menu.childNodes[m.createParent].setAttribute('label', Zotero.getString('pane.items.menu.createParent' + multiple));
 		menu.childNodes[m.recognizePDF].setAttribute('label', Zotero.getString('pane.items.menu.recognizeDocument'));
-		menu.childNodes[m.refreshPublishedMetadata].setAttribute('label', Zotero.getString('recognition-refresh-published'));
+		menu.childNodes[m.refreshPublishedMetadata].setAttribute('label', Zotero.getString(
+			items.length == 1 && items[0].itemTypeID == Zotero.ItemTypes.getID('preprint')
+				? 'recognition-refresh-published' : 'recognition-refresh-metadata'));
 		menu.childNodes[m.reindexItem].setAttribute('label', Zotero.getString('pane.items.menu.reindexItem' + multiple));
 		
 		// Hide and enable all actions by default (so if they're shown they're enabled)

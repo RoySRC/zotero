@@ -1,12 +1,25 @@
 # PDF Recognition Gateway
 
-Recognition version 2 runs in a separate container. This server only authenticates
+Current desktop builds run **EpiLib (on this device)** with a profile-local SQLite
+cache. Existing EpiLib recognition selections migrate on startup. This mode does
+not use this gateway, account authentication, or a remote recognition container.
+See the independent engine repository's README for bundled build/cache details.
+Shared remote metadata-repository functionality is not implemented yet.
+
+The following describes the retained **legacy HTTP deployment** for older clients.
+Recognition version 2 can run in a separate container. This server only authenticates
 the user and forwards bounded requests with a private service credential. It does
 not perform provider lookups, run GROBID, or store PDF extraction data.
 
-See [the recognition service guide](../recognition-server/README.md) for the full
+The worker now lives in the separate `epilib-pdf-recognition-engine` repository.
+For sibling local checkouts, see [the recognition service guide](../../../epilib-pdf-recognition-engine/README.md) for the full
 architecture, beginner-oriented source map, API contracts, provider integration,
 local GROBID settings, Crossref sample evaluation, deployment, and tests.
+
+The desktop bundles generated assets from that repository without duplicating its
+editable source. This gateway communicates with its deployed HTTP service. Backend
+unit/regression/container tests run in the recognition repository; gateway
+contract tests remain here (`node --test test/recognizer.test.mjs`).
 
 ## Gateway configuration
 
@@ -61,3 +74,52 @@ Missing configuration returns 503. Unreachable/invalid worker replies return
 sanitized errors; the gateway never falls back to Zotero or the former in-process
 identifier extractor. The new desktop understands both the legacy version 1
 response and the complete-record version 2 response during upgrades.
+# Personal provider credentials
+
+The desktop's General > PDF Recognition > Provider API Keys editor stores secrets
+in its local login manager, scoped to the recognition URL and account. The
+authenticated gateway forwards a request's `providerKeys` object to its configured
+worker without storing it in PostgreSQL or merging it into shared server settings.
+The updated worker removes this object before extraction, caching and response
+generation; each request has isolated provider credentials. Health responses must
+pass through `providerCredentials: 1` so older workers cannot silently ignore keys.
+
+Use HTTPS between desktop and gateway except for loopback, and a trusted private
+network or HTTPS between gateway and worker. Do not enable request-body logging
+on proxies. Metadata account tokens, worker service keys, and provider API keys
+are separate credentials and must never be substituted for one another.
+## Shared metadata repository (local desktop engine)
+
+The account server now also exposes `/metadata-repository/v1/health`, `/query`,
+and `/records`. These authenticated routes exchange bounded public bibliographic
+records, not PDFs or extraction. They do not require a recognition container.
+The desktop's local EpiLib engine checks this repository before catalogs; misses
+and unavailable/older servers fall back to the normal catalog pipeline. Shared
+results always require human review because contributions are unverified.
+
+General > PDF Recognition has separate lookup and contribution checkboxes.
+Lookup is enabled by default for local EpiLib; contribution is opt-in. The existing
+Account server URL/token is used, with HTTPS required except for loopback HTTP.
+Notes, tags, abstracts, arbitrary Extra fields, filenames, URLs, library IDs,
+PDF content and credentials are never contributed. Public records are shared
+across authenticated users of this server, not restricted by library membership.
+
+The implementation remains in `epilib-pdf-recognition-engine/src/repository-*.mjs`.
+Generate the deployment artifact there with:
+
+```sh
+npm run build:repository -- ../zotero-desktop/tools/postgresql-sync-server/vendor/recognition-repository
+```
+
+Deploy this server including `vendor/recognition-repository`, then restart it
+using its existing database/auth configuration. Startup adds independent
+`recognition_repository_records` and `recognition_repository_contributions`
+tables; existing sync records and account credentials are not changed. A 30-day
+TTL, per-account quotas, immutable deduplicated records and process-local request
+limits bound storage/traffic. No automatic server restart is performed by a
+desktop build. Full protocol/operations documentation is in the engine repository's
+`docs/shared-repository.md`.
+
+`node --test test/metadata-repository.test.mjs` checks bundle integrity. Set
+`TEST_DATABASE_URL` to enable real two-account API/database integration in a
+temporary database. It never changes the supplied database's tables.

@@ -38,6 +38,20 @@
 	}
 }
 #pdf-recognition-group {
+	.recognition-remote-only[hidden] { display: none; }
+	#recognition-provider-keys { margin-block: 12px; min-width: 0; }
+	#recognition-provider-key-fields {
+		display: grid;
+		grid-template-columns: minmax(150px, 1fr) minmax(150px, 2fr) max-content;
+		gap: 8px;
+		align-items: center;
+		margin-block: 12px;
+	}
+	.recognition-provider-key-row { display: contents; }
+	.recognition-provider-key-row input { width: 100%; min-width: 0; box-sizing: border-box; }
+	.recognition-provider-key-row label { overflow-wrap: anywhere; }
+	#recognition-provider-keys-status { overflow-wrap: anywhere; }
+	#recognition-provider-keys-status:empty { display: none; }
 	#pdf-recognition-server[hidden],
 	#pdf-recognition-grobid-settings[hidden] { display: none; }
 	.recognition-server-row {

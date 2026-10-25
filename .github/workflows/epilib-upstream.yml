@@ -66,7 +66,6 @@ jobs:
           git submodule update --init --recursive
           npm ci
           npm ci --prefix tools/postgresql-sync-server
-          npm ci --prefix tools/recognition-server
       - name: Apply branding and enforce review checks
         if: steps.merge.outputs.changed == 'true'
         env:
@@ -95,7 +94,8 @@ jobs:
           TEST_DATABASE_URL: postgres://epilib_test:disposable-ci-password@localhost:5432/epilib_test
         run: |
           npm test --prefix tools/postgresql-sync-server
-          npm test --prefix tools/recognition-server
+          # The independent recognition repository owns worker regression tests.
+          # The account-server suite still exercises the gateway HTTP contract.
       - name: Build and test the candidate
         if: steps.merge.outputs.changed == 'true'
         env:
@@ -103,7 +103,8 @@ jobs:
         run: |
           app/scripts/fetch_xulrunner -p l
           npm run build
-          xvfb-run -a test/runtests.sh -f -b epilibBranding epilibSyncIsolation recognitionEngine preferences_account storageLocal webdav syncLocal syncEngine syncRunner
+          node --test js-build/test/recognition-engine.test.js
+          xvfb-run -a test/runtests.sh -f -b epilibBranding epilibSyncIsolation localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview preferences_account storageLocal webdav syncLocal syncEngine syncRunner
           xvfb-run -a test/runtests.sh -f -b -g 'standalone PDF by ISBN' recognizeDocument
           # Rebuild without the test harness and inspect the finished distributable.
           app/scripts/dir_build -p l -f

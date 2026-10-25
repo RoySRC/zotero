@@ -119,19 +119,34 @@
 					<menupopup>
 						<menuitem value="zotero" data-l10n-id="preferences-recognition-zotero"/>
 						<menuitem value="epilib" data-l10n-id="preferences-recognition-epilib"/>
+						<menuitem value="epilib-local" data-l10n-id="preferences-recognition-epilib-local"/>
 					</menupopup>
 				</menulist>
 			</hbox>
 			<vbox id="pdf-recognition-server" hidden="true">
-				<html:div class="recognition-server-row">
+				<vbox id="pdf-recognition-repository-settings" hidden="true">
+					<checkbox id="pdf-recognition-repository" data-l10n-id="preferences-recognition-repository"
+						preference="extensions.zotero.recognize.repository.enabled"/>
+					<checkbox id="pdf-recognition-contribute" data-l10n-id="preferences-recognition-contribute"
+						preference="extensions.zotero.recognize.repository.contribute"/>
+				</vbox>
+				<html:div class="recognition-server-row recognition-remote-only">
 					<html:label for="pdf-recognition-url" data-l10n-id="preferences-recognition-server"/>
 					<html:input id="pdf-recognition-url" type="url"
 						preference="extensions.zotero.recognize.epilib.url"/>
 				</html:div>
-				<hbox>
+				<hbox class="recognition-remote-only">
 					<button id="pdf-recognition-verify" data-l10n-id="preferences-recognition-verify"
 						oncommand="Zotero_Preferences.General.verifyRecognitionServer()"/>
 				</hbox>
+				<html:section id="recognition-provider-keys" aria-labelledby="recognition-provider-keys-heading">
+					<html:h3 id="recognition-provider-keys-heading" data-l10n-id="preferences-recognition-provider-keys"/>
+					<html:div id="recognition-provider-key-fields"/>
+					<html:button id="recognition-provider-keys-save" type="button" disabled="true"
+						data-l10n-id="preferences-recognition-provider-keys-save"
+						onclick="Zotero_Preferences.General.saveRecognitionProviderKeys()"/>
+					<html:p id="recognition-provider-keys-status" role="status" aria-live="polite"/>
+				</html:section>
 				<checkbox id="pdf-recognition-grobid" data-l10n-id="preferences-recognition-grobid"
 					preference="extensions.zotero.recognize.grobid.enabled"/>
 				<vbox id="pdf-recognition-grobid-settings" hidden="true">

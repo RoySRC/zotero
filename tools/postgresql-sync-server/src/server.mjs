@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import pg from 'pg';
 import { createRecognizerRouter } from './recognizer-routes.mjs';
+import { createMetadataRepositoryRouter, ensureMetadataRepositorySchema } from '../vendor/recognition-repository/repository.mjs';
 
 const { Pool } = pg;
 
@@ -79,6 +80,7 @@ app.use(asyncHandler(async (req, res, next) => {
 }));
 
 app.use('/recognizer', createRecognizerRouter());
+app.use('/metadata-repository/v1', createMetadataRepositoryRouter({ pool }));
 // Recognition has already applied its smaller limit after authentication. Other
 // sync/auth routes retain their existing JSON limit and request-body contract.
 app.use(express.json({ limit: '25mb' }));
@@ -2175,6 +2177,7 @@ app.use((_req, res) => {
 });
 
 await ensureRuntimeSchema();
+await ensureMetadataRepositorySchema(pool);
 
 app.listen(PORT, () => {
 	console.log(`EpiLib PostgreSQL sync server listening on port ${PORT}`);

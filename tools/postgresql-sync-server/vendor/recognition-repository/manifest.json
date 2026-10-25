@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "sourceDigest": "fe51ac4f65c92f2fbd031087d188c6fbcf3e302f2c18b9ba4d06a20448af5890",
+  "files": {
+    "repository.mjs": "63705c425cdd39e7b3b61957fa84620f0eb6361c7c9d487d48a4d549ad1818b8",
+    "LICENSES.txt": "5b7dc919393650eef5f37b25cc399717159a7df5cdec98fa26c846346389bce6"
+  }
+}

@@ -1,0 +1,64 @@
+/* Native review dialog: fixed source rail and a wrapping, scrollable field table. */
+#recognition-review-window {
+	color-scheme: light dark;
+	background: Canvas;
+	color: CanvasText;
+	min-width: 680px;
+	min-height: 420px;
+	display: flex;
+	height: 100vh;
+}
+#recognition-review-dialog { padding: 16px; min-height: 0; flex: 1; }
+/* The native dialog wraps its slot in a shadow vbox; allow that box to shrink. */
+#recognition-review-dialog::part(content-box) { flex: 1; min-height: 0; }
+#recognition-review-layout {
+	display: grid;
+	grid-template-columns: 220px minmax(0, 1fr);
+	gap: 20px;
+	flex: 1;
+	min-height: 0;
+	grid-template-rows: minmax(0, 1fr);
+	color: CanvasText;
+}
+#recognition-review-sidebar { display: flex; flex-direction: column; min-height: 0; gap: 10px; }
+#recognition-review-sources-label { font-weight: 600; }
+#recognition-review-sources {
+	width: 100%;
+	flex: 1;
+	min-height: 160px;
+	color: CanvasText;
+	background: Field;
+	border: 1px solid GrayText;
+	border-radius: 4px;
+}
+#recognition-review-sources option { padding: 9px 7px; text-overflow: ellipsis; overflow: hidden; }
+#recognition-review-provider-status { font-size: 11px; overflow-wrap: anywhere; }
+#recognition-review-provider-status p { margin: 4px 0; }
+#recognition-review-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#recognition-review-heading { font-size: 16px; margin: 0 0 8px; line-height: 1.4; overflow-wrap: anywhere; }
+#recognition-review-summary { font-size: 12px; margin: 0 0 12px; overflow-wrap: anywhere; }
+#recognition-review-warning { font-size: 12px; color: MarkText; background: Mark; padding: 8px; }
+#recognition-review-scroll { flex: 1; min-height: 0; overflow: auto; border-block: 1px solid GrayText; }
+#recognition-review-table { display: table; table-layout: fixed; width: 100%; border-collapse: collapse; font-size: 12px; }
+#recognition-review-table .review-field { width: 22%; }
+#recognition-review-table .review-value { width: 51%; }
+#recognition-review-table .review-source { width: 27%; }
+#recognition-review-table thead { display: table-header-group; position: sticky; top: 0; background: Canvas; z-index: 1; }
+#recognition-review-table tbody { display: table-row-group; }
+#recognition-review-table tr { display: table-row; }
+#recognition-review-table th, #recognition-review-table td {
+	display: table-cell;
+	text-align: start;
+	vertical-align: top;
+	padding: 10px 8px;
+	border-bottom: 1px solid color-mix(in srgb, GrayText 35%, transparent);
+	overflow-wrap: anywhere;
+}
+#recognition-review-table tbody th { font-weight: normal; }
+.metadata-value { white-space: pre-wrap; user-select: text; }
+.metadata-source-choice { width: 100%; min-width: 0; font: inherit; }
+#recognition-review-replace-row { display: flex; align-items: center; gap: 7px; padding: 12px 0 4px; }
+#recognition-review-dialog [hidden] { display: none !important; }
+@media (max-width: 780px) {
+	#recognition-review-layout { grid-template-columns: 180px minmax(0, 1fr); gap: 12px; }
+}

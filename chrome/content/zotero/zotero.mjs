@@ -123,6 +123,7 @@ const xpcomFilesLocal = [
 	'progressQueue',
 	'progressQueueDialog',
 	'quickCopy',
+	'localRecognition',
 	'recognizeDocument',
 	'report',
 	'retractions',

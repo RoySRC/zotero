@@ -43,6 +43,7 @@ Zotero.Prefs = new function () {
 		}
 		
 		this._checkUserJS();
+		this.migrateLocalRecognition();
 
 		// Process pref version updates
 		var fromVersion = this.get('prefVersion');
@@ -238,6 +239,13 @@ Zotero.Prefs = new function () {
 				}
 			}
 			this.set('prefVersion', toVersion);
+		}
+	};
+
+	/** Preserve explicit Zotero selection, but upgrade remote EpiLib profiles once. */
+	this.migrateLocalRecognition = function () {
+		if (this.get('recognize.engine') == 'epilib') {
+			this.set('recognize.engine', 'epilib-local');
 		}
 	};
 	

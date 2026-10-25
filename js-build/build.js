@@ -7,6 +7,7 @@ const getSass = require('./sass');
 const getSymlinks = require('./symlinks');
 const getReader = require('./reader');
 const getDocumentWorker = require('./document-worker');
+const getRecognitionEngine = require('./recognition-engine');
 const getZoteroNoteEditor = require('./note-editor');
 const getTranslatorsMetadata = require('./translators-metadata');
 const { formatDirsForMatcher, getSignatures, writeSignatures, cleanUp, onSuccess, onError} = require('./utils');
@@ -39,6 +40,7 @@ if (require.main === module) {
 				getSymlinks(symlinkDirs, { ignore: ignoreMask }, signatures),
 				getReader(signatures),
 				getDocumentWorker(signatures),
+				getRecognitionEngine(),
 				getZoteroNoteEditor(signatures),
 				getTranslatorsMetadata()
 			]);

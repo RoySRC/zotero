@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero/skin/zotero.css" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero/skin/recognitionReview.css" type="text/css"?>
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        id="recognition-review-window" windowtype="zotero:recognition-review"
+        width="980" height="650" onload="Zotero_Recognition_Review.init()">
+    <script src="chrome://zotero/content/include.js"/>
+    <script src="chrome://zotero/content/recognitionReview.js"/>
+    <dialog id="recognition-review-dialog" buttons="cancel,accept" flex="1">
+        <html:div id="recognition-review-layout">
+            <html:aside id="recognition-review-sidebar">
+                <html:label for="recognition-review-sources" id="recognition-review-sources-label"/>
+                <html:select id="recognition-review-sources" size="12"/>
+                <html:div id="recognition-review-provider-status"/>
+            </html:aside>
+            <html:main id="recognition-review-main">
+                <html:header>
+                    <html:h1 id="recognition-review-heading"/>
+                    <html:p id="recognition-review-summary"/>
+                    <html:p id="recognition-review-warning" role="status" hidden="hidden"/>
+                </html:header>
+                <html:div id="recognition-review-scroll" tabindex="0">
+                    <html:table id="recognition-review-table">
+                        <html:colgroup><html:col class="review-field"/><html:col class="review-value"/><html:col class="review-source"/></html:colgroup>
+                        <html:thead><html:tr>
+                            <html:th scope="col" id="recognition-review-field-header"/>
+                            <html:th scope="col" id="recognition-review-value-header"/>
+                            <html:th scope="col" id="recognition-review-source-header"/>
+                        </html:tr></html:thead>
+                        <html:tbody id="recognition-review-fields"/>
+                    </html:table>
+                </html:div>
+            </html:main>
+        </html:div>
+        <html:label id="recognition-review-replace-row" hidden="hidden">
+            <html:input type="checkbox" id="recognition-review-replace"/>
+            <html:span id="recognition-review-replace-label"/>
+        </html:label>
+    </dialog>
+</window>

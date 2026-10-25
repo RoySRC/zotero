@@ -53,6 +53,7 @@ Zotero.RecognizeDocument = new function () {
 		_queue = [];
 		_cancelRevision++;
 		_localRequest?.abort();
+		if (Zotero.Prefs.get('recognize.engine') == 'epilib-local') Zotero.LocalRecognition.cancelAll();
 	});
 	
 	this.recognizeStub = null;
@@ -437,6 +438,76 @@ Zotero.RecognizeDocument = new function () {
 		return { baseURL, accountURL: baseURL == accountURL ? accountURL : null };
 	}
 
+	/** Supported fields are explicit so passwords cannot become arbitrary request options. */
+	this.providerCredentialNames = Object.freeze([
+		'googleBooks', 'openAlex', 'semanticScholar', 'pubmed', 'crossref', 'worldcatClientID', 'worldcatClientSecret'
+	]);
+
+	/** Bind personal keys to one destination and local account, never to every recognizer. */
+	this.getProviderCredentialScope = function () {
+		// Retain saved keys from the former gateway without ever contacting it.
+		// A fresh local-only installation needs neither a server URL nor login.
+		if (Zotero.Prefs.get('recognize.engine') == 'epilib-local') {
+			try { return { baseURL: _getEpiLibConfiguration().baseURL, userID: Zotero.Users.getCurrentUserID() || 0 }; }
+			catch { return { baseURL: 'epilib-local:', userID: Zotero.Users.getCurrentUserID() || 0 }; }
+		}
+		return { baseURL: _getEpiLibConfiguration().baseURL, userID: Zotero.Users.getCurrentUserID() || 0 };
+	};
+
+	/** One encrypted login contains the entire set, making paired OCLC updates atomic. */
+	async function _providerCredentialLogin(scope) {
+		let realm = 'EpiLib PDF provider credentials: ' + JSON.stringify([scope.baseURL, scope.userID]);
+		let logins = await Services.logins.searchLoginsAsync({ origin: 'chrome://zotero', httpRealm: realm });
+		return { realm, login: logins.find(login => login.username == 'providerKeys') };
+	}
+
+	/** Reject malformed keys before touching stored credentials; never echo their values. */
+	function _validateProviderCredentials(keys) {
+		if (!keys || typeof keys != 'object' || Array.isArray(keys)) {
+			throw new Error(Zotero.getString('recognition-provider-keys-invalid'));
+		}
+		let clean = {};
+		for (let [name, value] of Object.entries(keys)) {
+			if (!Zotero.RecognizeDocument.providerCredentialNames.includes(name) || typeof value != 'string'
+					|| !value.trim() || value.length > 512 || /[\x00-\x1f\x7f]/.test(value)) {
+				throw new Error(Zotero.getString('recognition-provider-keys-invalid'));
+			}
+			clean[name] = value.trim();
+		}
+		if (!!clean.worldcatClientID != !!clean.worldcatClientSecret) {
+			throw new Error(Zotero.getString('recognition-provider-worldcat-pair'));
+		}
+		return clean;
+	}
+
+	/** Read credentials only from the encrypted login manager, never ordinary preferences. */
+	this.getProviderCredentials = async function (scope = this.getProviderCredentialScope()) {
+		let { login } = await _providerCredentialLogin(scope);
+		if (!login) return {};
+		let keys;
+		try { keys = JSON.parse(login.password); }
+		catch { throw new Error(Zotero.getString('recognition-provider-keys-invalid')); }
+		return _validateProviderCredentials(keys);
+	};
+
+	/** Save a complete set after checking that the settings pane still targets the same account. */
+	this.setProviderCredentials = async function (keys, scope = this.getProviderCredentialScope()) {
+		let clean = _validateProviderCredentials(keys);
+		let { realm, login } = await _providerCredentialLogin(scope);
+		if (JSON.stringify(scope) != JSON.stringify(this.getProviderCredentialScope())) {
+			throw new Error(Zotero.getString('recognition-server-changed'));
+		}
+		if (!Object.keys(clean).length) {
+			if (login) await Services.logins.removeLoginAsync(login);
+			return;
+		}
+		let LoginInfo = new Components.Constructor('@mozilla.org/login-manager/loginInfo;1',
+			Components.interfaces.nsILoginInfo, 'init');
+		let replacement = new LoginInfo('chrome://zotero', null, realm, 'providerKeys', JSON.stringify(clean), '', '');
+		if (login) await Services.logins.modifyLoginAsync(login, replacement);
+		else await Services.logins.addLoginAsync(replacement);
+	};
+
 	/**
 	 * Snapshot the selected engine and destination before starting asynchronous PDF
 	 * work. Tokens are deliberately NOT stored here or in the feedback-origin map.
@@ -446,6 +517,13 @@ Zotero.RecognizeDocument = new function () {
 	 */
 	this.getRecognitionConfiguration = function () {
 		let engine = Zotero.Prefs.get('recognize.engine');
+		if (engine == 'epilib-local') {
+			return Object.freeze({ engine: 'epilib', execution: 'local', baseURL: null, accountURL: null,
+				credentialScope: this.getProviderCredentialScope(),
+				credentialUserID: Zotero.Users.getCurrentUserID() || 0,
+				grobidEnabled: Zotero.Prefs.get('recognize.grobid.enabled'),
+				grobidURL: Zotero.Prefs.get('recognize.grobid.url'), cancelRevision: _cancelRevision });
+		}
 		let baseURL;
 		let accountURL = null;
 		if (engine == 'zotero') {
@@ -457,7 +535,7 @@ Zotero.RecognizeDocument = new function () {
 		else {
 			throw new Error(Zotero.getString('recognition-engine-invalid'));
 		}
-		return Object.freeze({ engine, baseURL, accountURL,
+		return Object.freeze({ engine, baseURL, accountURL, credentialUserID: Zotero.Users.getCurrentUserID() || 0,
 			grobidEnabled: engine == 'epilib' && Zotero.Prefs.get('recognize.grobid.enabled'),
 			grobidURL: Zotero.Prefs.get('recognize.grobid.url'), cancelRevision: _cancelRevision });
 	};
@@ -482,7 +560,8 @@ Zotero.RecognizeDocument = new function () {
 			// can remain in the override after the user switches metadata accounts.
 			let assertCurrentServer = () => {
 				let current = _getEpiLibConfiguration();
-				if (configuration.baseURL != current.baseURL || configuration.accountURL != current.accountURL) {
+				if (configuration.baseURL != current.baseURL || configuration.accountURL != current.accountURL
+						|| configuration.credentialUserID != (Zotero.Users.getCurrentUserID() || 0)) {
 					throw new Error(Zotero.getString('recognition-server-changed'));
 				}
 			};
@@ -493,6 +572,33 @@ Zotero.RecognizeDocument = new function () {
 				if (!key) throw new Error(Zotero.getString('recognition-login-required'));
 				headers['Zotero-API-Key'] = key;
 			}
+			if (endpoint == 'recognize') {
+				let keys = await Zotero.RecognizeDocument.getProviderCredentials({
+					baseURL: configuration.baseURL, userID: configuration.credentialUserID });
+				assertCurrentServer();
+				// Ignore caller-injected credentials. Only the scoped login-manager set
+				// may cross the network, and never to Zotero, feedback or local GROBID.
+				body = { ...body };
+				delete body.providerKeys;
+				if (Object.keys(keys).length) {
+					let url = new URL(configuration.baseURL);
+					if (url.protocol != 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
+						throw new Error(Zotero.getString('recognition-provider-keys-https'));
+					}
+					// Older workers ignore unknown input fields. Check capability first
+					// so a saved key cannot silently fail to enable its provider.
+					let health = _parseResponse(await _request(configuration, 'health'));
+					assertCurrentServer();
+					if (health?.engine != 'epilib' || health.providerCredentials !== 1) {
+						throw new Error(Zotero.getString('recognition-provider-keys-upgrade'));
+					}
+					body.providerKeys = keys;
+				}
+			}
+		}
+		else if (body && Object.hasOwn(body, 'providerKeys')) {
+			body = { ...body };
+			delete body.providerKeys;
 		}
 		let response;
 		if (endpoint == 'recognize' && configuration.cancelRevision != _cancelRevision) {
@@ -544,10 +650,28 @@ Zotero.RecognizeDocument = new function () {
 	 * @returns {Promise<object|null>} Identifier or bibliographic recognition result.
 	 */
 	this.queryPDFMetadata = async function (json, configuration = this.getRecognitionConfiguration()) {
-		let result = _parseResponse(await _request(configuration, 'recognize', json));
+		let result;
+		if (configuration.execution == 'local') {
+			const assertCurrent = () => {
+				if (configuration.cancelRevision != _cancelRevision) throw new Error(Zotero.getString('recognition-cancelled'));
+				if (Zotero.Prefs.get('recognize.engine') != 'epilib-local'
+					|| JSON.stringify(configuration.credentialScope) != JSON.stringify(this.getProviderCredentialScope())) {
+					throw new Error(Zotero.getString('recognition-server-changed'));
+				}
+			};
+			assertCurrent();
+			const keys = await this.getProviderCredentials(configuration.credentialScope);
+			assertCurrent();
+			const payload = { ...json };
+			delete payload.providerKeys;
+			result = await Zotero.LocalRecognition.recognize(payload, keys, JSON.stringify(configuration.credentialScope));
+			assertCurrent();
+		}
+		else result = _parseResponse(await _request(configuration, 'recognize', json));
 		if (result === null) return null;
 		if (configuration.engine == 'epilib' && result?.version == 2 && result.engine == 'epilib') {
 			if (result.status == 'no_match') return result;
+			if (result.review) result.review = _validateReview(result.review);
 			if (result.status == 'matched') {
 				result.item = _validateResolvedItem(result.item);
 				return result;
@@ -575,6 +699,9 @@ Zotero.RecognizeDocument = new function () {
 	/** Verify EpiLib protocol availability without extracting or uploading a PDF. */
 	this.verifyRecognitionServer = async function () {
 		let configuration = this.getRecognitionConfiguration();
+		if (configuration.execution == 'local') {
+			return { engine: 'epilib', version: 2, protocol: 'epilib-recognition-v2', execution: 'local' };
+		}
 		if (configuration.engine != 'epilib') throw new Error(Zotero.getString('recognition-engine-invalid'));
 		let result = _parseResponse(await _request(configuration, 'health'));
 		if (result?.engine != 'epilib' || !((result.version == 1 && result.protocol == 'zotero-recognizer-json')
@@ -608,7 +735,9 @@ Zotero.RecognizeDocument = new function () {
 		let typeID = Zotero.ItemTypes.getID(record.itemType);
 		for (let field of ['DOI', 'ISBN', 'ISSN', 'date', 'publicationTitle', 'volume', 'issue', 'pages',
 			'bookTitle', 'proceedingsTitle', 'publisher', 'url', 'libraryCatalog', 'archiveID', 'repository',
-			'abstractNote', 'language', 'rights', 'university', 'institution']) {
+			'abstractNote', 'language', 'rights', 'university', 'institution', 'conferenceName',
+			'eventPlace', 'place', 'series', 'seriesNumber', 'edition', 'shortTitle',
+			'thesisType', 'reportNumber', 'numPages']) {
 			// Abstracts are bibliographic text, not executable notes. Give them a
 			// larger bounded allowance while keeping all fields type-checked.
 			let limit = field == 'abstractNote' ? 20000 : 4000;
@@ -617,6 +746,12 @@ Zotero.RecognizeDocument = new function () {
 			let id = Zotero.ItemFields.getID(field);
 			if (id && Zotero.ItemFields.isValidForType(id, typeID)) clean[field] = record[field];
 			else if (field == 'DOI' && record.DOI) clean.extra = `DOI: ${record.DOI.replace(/[\r\n]/g, '')}`;
+			// Older schemas may lack an ISBN field for a recognized item type.
+			// Preserve only a valid identifier, never server-supplied Extra text.
+			else if (field == 'ISBN' && record.ISBN) {
+				let isbn = Zotero.Utilities.cleanISBN(record.ISBN);
+				if (isbn) clean.extra = [clean.extra, `ISBN: ${isbn}`].filter(Boolean).join('\n');
+			}
 		}
 		// A published paper has no archiveID field. Preserve only a validated
 		// alternate arXiv identifier in Extra, never arbitrary provider Extra text.
@@ -635,41 +770,96 @@ Zotero.RecognizeDocument = new function () {
 	}
 
 	/**
-	 * Require an explicit choice for ambiguous candidates. The existing native
-	 * prompt provides keyboard navigation and safe text rendering; no provider
-	 * HTML is rendered. Cancel or exhausting candidates creates no parent record.
+	 * Validate comparison records at the same boundary as ordinary recognition.
+	 * Provider labels are plain text; field selectors can reference only validated
+	 * bibliographic fields, never item type/identity or prototype properties.
 	 */
-	this.chooseRecognitionCandidate = function (candidates) {
-		for (let candidate of candidates) {
-			let item = candidate.item;
-			let details = [item.title, Zotero.ItemTypes.getLocalizedString(item.itemType),
-				item.creators.map(c => c.name || [c.firstName, c.lastName].filter(Boolean).join(' ')).join(', '),
-				item.proceedingsTitle || item.publicationTitle, item.date,
-				item.DOI || item.ISBN || item.archiveID, item.libraryCatalog].filter(Boolean).join('\n\n');
-			let prompt = Services.prompt;
-			let choice = prompt.confirmEx(Zotero.getMainWindow(), Zotero.getString('recognition-review-title'), details,
-				prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_IS_STRING
-				| prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_IS_STRING
-				| prompt.BUTTON_POS_2 * prompt.BUTTON_TITLE_IS_STRING
-				| prompt.BUTTON_POS_2_DEFAULT,
-				Zotero.getString('recognition-review-use'), Zotero.getString('recognition-review-next'),
-				Zotero.getString('recognition-review-cancel'), null, {});
-			if (choice == 0) return item;
-			if (choice != 1) break;
+	function _validateReview(review) {
+		if (!Array.isArray(review.sources) || !review.sources.length || review.sources.length > 21) {
+			throw new Error(Zotero.getString('recognition-response-invalid'));
 		}
-		return null;
+		let ids = new Set();
+		let blocked = ['itemType', 'DOI', 'url', 'archiveID', 'repository', 'extra', 'libraryCatalog', 'citationKey'];
+		let sources = review.sources.map(source => {
+			if (!/^[a-z0-9-]{1,40}$/.test(source.id) || source.id == 'custom' || ids.has(source.id)
+					|| typeof source.label != 'string' || source.label.length > 100) {
+				throw new Error(Zotero.getString('recognition-response-invalid'));
+			}
+			ids.add(source.id);
+			let item = _validateResolvedItem(source.item);
+			let mergeFields = Array.isArray(source.mergeFields) ? source.mergeFields
+				.filter(field => Object.hasOwn(item, field) && !blocked.includes(field)) : [];
+			return { id: source.id, label: source.label, item, mergeFields };
+		});
+		let item = _validateResolvedItem(review.custom?.item);
+		let fieldSources = Object.fromEntries(Object.entries(review.custom?.fieldSources || {})
+			.filter(([field, id]) => Object.hasOwn(item, field) && ids.has(id)));
+		let providers = (Array.isArray(review.providers) ? review.providers : []).slice(0, 16)
+			.filter(p => typeof p.name == 'string' && p.name.length <= 100
+				&& ['matched', 'no_match', 'unavailable', 'not_configured'].includes(p.status))
+			.map(p => ({ name: p.name, status: p.status }));
+		return { sources, custom: { item, fieldSources }, providers };
+	}
+
+	/**
+	 * Open a native comparison window with source records and a combined option.
+	 * Only the accepted output leaves the dialog; browsing/closing makes no edits.
+	 * Older workers still get a source list, but cannot authorize cross-source merges.
+	 */
+	this.chooseRecognitionCandidate = function (candidates, options = {}) {
+		if (!candidates.length) return null;
+		let review = options.review || {
+			sources: candidates.map((candidate, i) => ({ id: 'candidate-' + i,
+				label: candidate.item.libraryCatalog || Zotero.getString('recognition-review-result'),
+				item: candidate.item, mergeFields: [] })),
+			custom: { item: candidates[0].item, fieldSources: {} }, providers: []
+		};
+		let io = { review, refresh: !!options.refresh, requiredDOI: options.requiredDOI,
+			allowedTypes: options.allowedTypes, out: null, replaceExisting: false };
+		let args = ['chrome://zotero/content/recognitionReview.xhtml', '', 'chrome,modal,centerscreen,resizable', io];
+		let win = Zotero.getMainWindow();
+		if (win) win.openDialog(...args);
+		else {
+			io.wrappedJSObject = io;
+			Services.ww.openWindow(null, ...args);
+		}
+		options.replaceExisting = io.replaceExisting;
+		return io.out;
 	};
 
-	/** Limit in-place refresh to editable preprints; ordinary recognition stays unchanged. */
+	/** Offer in-place enrichment for DOI records and publication upgrades for preprints. */
 	this.canRefreshPublishedMetadata = function (item) {
-		return Zotero.Prefs.get('recognize.engine') == 'epilib'
-			&& item?.itemTypeID == Zotero.ItemTypes.getID('preprint')
-			&& !item.deleted && !item.isFeedItem && item.isEditable();
+		let types = ['journalArticle', 'conferencePaper', 'bookSection', 'book', 'thesis', 'report'];
+		return !!(['epilib', 'epilib-local'].includes(Zotero.Prefs.get('recognize.engine'))
+			&& item && (item.itemTypeID == Zotero.ItemTypes.getID('preprint')
+				|| (types.some(type => item.itemTypeID == Zotero.ItemTypes.getID(type)) && item.getField('DOI')))
+			&& !item.deleted && !item.isFeedItem && item.isEditable());
 	};
 
 	/**
-	 * Resolve an existing preprint using its bibliographic identifiers/byline, then
-	 * ask before changing its metadata. No temporary parent is created, no PDF is
+	 * Citation keys are local labels, not DOI metadata. Generate one only when
+	 * absent; the native item key disambiguates author/year/title collisions in
+	 * this library and keeps the label stable across sync and later refreshes.
+	 * Never accept a provider's CSL `id` or replace a user/plugin-defined key.
+	 */
+	function _ensureCitationKey(item) {
+		if (item.getField('citationKey')) return;
+		if (!item.key) throw new Error('Save the item before generating a citation key');
+		let normalize = value => value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+			.replace(/[^a-zA-Z0-9]/g, '');
+		let author = item.getCreators().find(c => c.creatorTypeID == Zotero.CreatorTypes.getID('author'));
+		let family = author?.fieldMode ? author.lastName.split(/\s+/).pop() : author?.lastName;
+		let name = normalize(family || '').slice(0, 40) || 'anon';
+		let year = item.getField('date').match(/\b(?:19|20)\d{2}\b/)?.[0] || 'nd';
+		let title = item.getField('title').split(/\s+/).map(normalize)
+			.filter(word => word && !/^(a|an|the|in|of|to|for|and)$/i.test(word)).slice(0, 3).join('').slice(0, 60);
+		item.setField('citationKey', `${name.toLowerCase()}${year}${title}-${item.key}`);
+	}
+
+	/**
+	 * Resolve an existing record using its bibliographic identifiers/byline, then
+	 * ask before filling missing publication fields or upgrading a preprint.
+	 * No temporary parent is created, no PDF is
 	 * uploaded, and attachments, annotations, collections and tags are untouched.
 	 * Compare a snapshot again inside the transaction to avoid overwriting an edit
 	 * or sync that completed while the network request/confirmation was pending.
@@ -678,37 +868,52 @@ Zotero.RecognizeDocument = new function () {
 	this.refreshPublishedMetadata = async function (item) {
 		if (!this.canRefreshPublishedMetadata(item)) throw new Error(Zotero.getString('recognition-refresh-unavailable'));
 		let before = JSON.stringify(item.toJSON());
+		let preprint = item.itemTypeID == Zotero.ItemTypes.getID('preprint');
 		let configuration = this.getRecognitionConfiguration();
 		let metadata = { Title: item.getField('title'), Author: item.getCreators()
 			.map(c => [c.firstName, c.lastName].filter(Boolean).join(' ')).join('; ') };
-		let arxiv = item.getField('archiveID').replace(/^arxiv:\s*/i, '').replace(/v\d+$/i, '');
+		let arxiv = preprint ? item.getField('archiveID').replace(/^arxiv:\s*/i, '').replace(/v\d+$/i, '') : '';
 		if (/^(?:\d{4}\.\d{4,5}|[a-z.-]+\/\d{7})$/i.test(arxiv)) metadata.arxiv = arxiv;
 		else if (item.getField('DOI')) metadata.DOI = item.getField('DOI');
-		let result = await this.queryPDFMetadata({ metadata, totalPages: 0, pages: [] }, configuration);
+		let result = await this.queryPDFMetadata({ metadata, totalPages: 0, pages: [], includeAlternatives: true }, configuration);
 		let candidates = result?.status == 'matched' ? [{ item: result.item }] : result?.candidates || [];
-		candidates = candidates.filter(candidate => ['conferencePaper', 'journalArticle'].includes(candidate.item.itemType));
+		candidates = candidates.filter(({ item: record }) => preprint
+			? ['conferencePaper', 'journalArticle', 'bookSection'].includes(record.itemType)
+			: Zotero.ItemTypes.getID(record.itemType) == item.itemTypeID
+				&& record.DOI?.toLowerCase() == item.getField('DOI').toLowerCase());
 		if (!candidates.length) throw new Error(Zotero.getString('recognition-refresh-no-publication'));
-		let record = this.chooseRecognitionCandidate(candidates);
+		let selection = { review: result.review, refresh: true,
+			requiredDOI: preprint ? null : item.getField('DOI'),
+			allowedTypes: preprint ? ['conferencePaper', 'journalArticle', 'bookSection'] : [Zotero.ItemTypes.getName(item.itemTypeID)] };
+		let record = this.chooseRecognitionCandidate(candidates, selection);
 		if (!record) return false;
+		if (!selection.allowedTypes.includes(record.itemType)
+				|| (selection.requiredDOI && record.DOI?.toLowerCase() != selection.requiredDOI.toLowerCase())) {
+			throw new Error(Zotero.getString('recognition-refresh-no-publication'));
+		}
 		if (configuration.cancelRevision != _cancelRevision) throw new Error(Zotero.getString('recognition-cancelled'));
 		await Zotero.DB.executeTransaction(async () => {
 			if (!this.canRefreshPublishedMetadata(item) || JSON.stringify(item.toJSON()) != before) {
 				throw new Error(Zotero.getString('recognition-refresh-changed'));
 			}
+			// Existing publications fill blanks unless replacement was explicitly
+			// checked. A preprint upgrade changes type/date/venue, never citation keys.
 			// Preserve user Extra and repository identifiers. Do not carry a preprint
 			// DOI into the published DOI field when the publication has no DOI.
 			let extra = [item.getField('extra'), record.extra];
 			if (arxiv && !record.extra?.includes(`arXiv: ${arxiv}`)) extra.push(`arXiv: ${arxiv}`);
 			let oldDOI = item.getField('DOI');
-			if (oldDOI && oldDOI != record.DOI) extra.push(`Preprint DOI: ${oldDOI}`);
+			if (preprint && oldDOI && oldDOI != record.DOI) extra.push(`Preprint DOI: ${oldDOI}`);
 			item.setType(Zotero.ItemTypes.getID(record.itemType));
-			item.setField('DOI', record.DOI || '');
+			if (preprint) item.setField('DOI', record.DOI || '');
 			for (let [field, value] of Object.entries(record)) {
-				if (['itemType', 'creators', 'tags', 'extra'].includes(field) || !value) continue;
+				if (['itemType', 'creators', 'tags', 'extra', 'citationKey'].includes(field) || !value) continue;
+				if (!preprint && !selection.replaceExisting && item.getField(field)) continue;
 				item.setField(field, value);
 			}
-			item.setCreators(record.creators);
+			if (record.creators.length && (preprint || selection.replaceExisting || !item.getCreators().length)) item.setCreators(record.creators);
 			item.setField('extra', [...new Set(extra.filter(Boolean))].join('\n'));
+			_ensureCitationKey(item);
 			await item.save();
 		});
 		return true;
@@ -857,14 +1062,20 @@ Zotero.RecognizeDocument = new function () {
 			}
 			if (configuration.cancelRevision != _cancelRevision) throw new Error(Zotero.getString('recognition-cancelled'));
 			let record = res?.status == 'matched' ? res.item : res?.status == 'needs_review'
-				? Zotero.RecognizeDocument.chooseRecognitionCandidate(res.candidates) : null;
+				? Zotero.RecognizeDocument.chooseRecognitionCandidate(res.candidates, { review: res.review }) : null;
 			if (!record) return null;
 			let parent = new Zotero.Item();
 			parent.libraryID = libraryID;
 			// Match translator imports: provider subjects are automatic tags and
 			// must respect the user's global preference for importing such tags.
 			parent.fromJSON(Zotero.Prefs.get('automaticTags') ? record : { ...record, tags: [] });
-			await parent.saveTx();
+			// Let the normal save allocate identity. Setting key after fromJSON is
+			// forbidden; both saves share a transaction so no partial parent escapes.
+			await Zotero.DB.executeTransaction(async () => {
+				await parent.save();
+				_ensureCitationKey(parent);
+				await parent.save();
+			});
 			return parent;
 		}
 		if (!res) return null;

@@ -69,6 +69,10 @@ Zotero_Preferences.General = {
 		// Invalidate a pending verification when this pane is closed.
 		this._recognitionRevision++;
 		this._grobidRevision++;
+		this._providerKeysRevision++;
+		this._providerKeysScope = null;
+		window.removeEventListener('focus', this._providerKeysFocus);
+		document.getElementById('zotero-prefpane-general').removeEventListener('showing', this._providerKeysFocus);
 	},
 
 	/**
@@ -80,10 +84,11 @@ Zotero_Preferences.General = {
 	_initRecognitionUI: function () {
 		this._recognitionRevision = 0;
 		this._grobidRevision = 0;
+		this._initProviderKeysUI();
 		let menu = document.getElementById('pdf-recognition-engine');
 		menu.addEventListener('syncfrompreference', () => this._updateRecognitionUI());
 		menu.addEventListener('synctopreference', () => this._updateRecognitionUI());
-		for (let id of ['pdf-recognition-url', 'pdf-recognition-grobid', 'pdf-recognition-grobid-url']) {
+		for (let id of ['pdf-recognition-url', 'pdf-recognition-grobid', 'pdf-recognition-grobid-url', 'pdf-recognition-repository']) {
 			let control = document.getElementById(id);
 			control.addEventListener('syncfrompreference', () => this._updateRecognitionUI());
 			control.addEventListener('synctopreference', () => this._updateRecognitionUI());
@@ -97,7 +102,15 @@ Zotero_Preferences.General = {
 	_updateRecognitionUI: function () {
 		this._recognitionRevision++;
 		this._grobidRevision++;
-		let epilib = Zotero.Prefs.get('recognize.engine') == 'epilib';
+		let selectedEngine = Zotero.Prefs.get('recognize.engine');
+		let epilib = ['epilib', 'epilib-local'].includes(selectedEngine);
+		document.getElementById('pdf-recognition-repository-settings').hidden = selectedEngine != 'epilib-local';
+		document.getElementById('pdf-recognition-contribute').disabled = !Zotero.Prefs.get('recognize.repository.enabled');
+		for (let node of document.querySelectorAll('.recognition-remote-only')) {
+			node.hidden = selectedEngine == 'epilib-local';
+		}
+		// The old transport is retained for compatibility, not offered for new selections.
+		document.querySelector('#pdf-recognition-engine [value="epilib"]').hidden = selectedEngine != 'epilib';
 		let status = document.getElementById('pdf-recognition-status');
 		document.getElementById('pdf-recognition-server').hidden = !epilib;
 		document.getElementById('pdf-recognition-grobid-settings').hidden = !epilib
@@ -122,6 +135,149 @@ Zotero_Preferences.General = {
 		catch (e) {
 			status.textContent = e.message;
 			document.getElementById('pdf-recognition-verify').disabled = true;
+		}
+		this._loadProviderKeysUI();
+	},
+
+	/**
+	 * Build explicitly labelled password controls without preference bindings.
+	 * Secrets belong in the login manager, never prefs.js or the visible DOM.
+	 * Each field starts blank; a saved-value placeholder distinguishes keeping a
+	 * credential from replacing it. Clear marks a removal until Save is pressed.
+	 */
+	_initProviderKeysUI: function () {
+		this._providerKeysRevision = 0;
+		this._providerKeysScope = null;
+		this._providerKeysRemoved = new Set();
+		let container = document.getElementById('recognition-provider-key-fields');
+		container.replaceChildren();
+		for (let name of Zotero.RecognizeDocument.providerCredentialNames) {
+			let row = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+			row.className = 'recognition-provider-key-row';
+			let label = document.createElementNS('http://www.w3.org/1999/xhtml', 'label');
+			let input = document.createElementNS('http://www.w3.org/1999/xhtml', 'input');
+			input.id = 'recognition-provider-key-' + name;
+			input.type = 'password';
+			input.autocomplete = 'off';
+			input.maxLength = 512;
+			input.disabled = true;
+			label.htmlFor = input.id;
+			document.l10n.setAttributes(label, 'preferences-recognition-key-' + name.toLowerCase());
+			let clear = document.createElementNS('http://www.w3.org/1999/xhtml', 'button');
+			clear.type = 'button';
+			clear.disabled = true;
+			document.l10n.setAttributes(clear, 'preferences-recognition-provider-key-clear');
+			clear.addEventListener('click', () => this.clearRecognitionProviderKey(name));
+			row.append(label, input, clear);
+			container.append(row);
+		}
+		// Returning from Account Settings must not keep credentials for the old user.
+		this._providerKeysFocus = () => this._loadProviderKeysUI();
+		window.addEventListener('focus', this._providerKeysFocus);
+		document.getElementById('zotero-prefpane-general').addEventListener('showing', this._providerKeysFocus);
+	},
+
+	/** Load only saved/not-set state, discarding late results after scope changes. */
+	_loadProviderKeysUI: async function (force = false) {
+		let scope = null;
+		try {
+			if (['epilib', 'epilib-local'].includes(Zotero.Prefs.get('recognize.engine'))) {
+				scope = Zotero.RecognizeDocument.getProviderCredentialScope();
+			}
+		}
+		catch { /* An incomplete server URL has no credential scope yet. */ }
+		if (!force && JSON.stringify(scope) == JSON.stringify(this._providerKeysScope)) return this._providerKeysLoading;
+		this._providerKeysScope = scope;
+		let revision = ++this._providerKeysRevision;
+		this._providerKeysRemoved = new Set();
+		let status = document.getElementById('recognition-provider-keys-status');
+		status.textContent = '';
+		this._setProviderKeysDisabled(true);
+		for (let name of Zotero.RecognizeDocument.providerCredentialNames) {
+			let input = document.getElementById('recognition-provider-key-' + name);
+			input.value = '';
+			input.placeholder = '';
+		}
+		this._providerKeysLoading = scope ? this._readProviderKeysUI(scope, revision) : Promise.resolve();
+		return this._providerKeysLoading;
+	},
+
+	/** Share in-flight reads with refresh callers, so awaiting a refresh means the fields are ready. */
+	_readProviderKeysUI: async function (scope, revision) {
+		try {
+			let keys = await Zotero.RecognizeDocument.getProviderCredentials(scope);
+			if (revision != this._providerKeysRevision) return;
+			for (let name of Zotero.RecognizeDocument.providerCredentialNames) {
+				document.getElementById('recognition-provider-key-' + name).placeholder = Zotero.getString(
+					keys[name] ? 'recognition-provider-key-saved' : 'recognition-provider-key-empty');
+			}
+			this._setProviderKeysDisabled(false);
+		}
+		catch {
+			if (revision == this._providerKeysRevision) {
+				document.getElementById('recognition-provider-keys-status').textContent
+					= Zotero.getString('recognition-provider-keys-load-failed');
+			}
+		}
+	},
+
+	/** Disable the whole editor during login-manager operations to prevent races. */
+	_setProviderKeysDisabled: function (disabled) {
+		for (let control of document.querySelectorAll('#recognition-provider-keys input, #recognition-provider-keys button')) {
+			control.disabled = disabled;
+		}
+	},
+
+	/** WorldCat's OAuth identity and secret are always removed together. */
+	clearRecognitionProviderKey: function (name) {
+		let names = name.startsWith('worldcat') ? ['worldcatClientID', 'worldcatClientSecret'] : [name];
+		for (let key of names) {
+			this._providerKeysRemoved.add(key);
+			let input = document.getElementById('recognition-provider-key-' + key);
+			input.value = '';
+			input.placeholder = Zotero.getString('recognition-provider-key-remove');
+		}
+	},
+
+	/**
+	 * Merge explicit edits with the saved set and persist it atomically. Empty
+	 * inputs keep existing keys; only Clear removes them. Never echo secret-bearing
+	 * exceptions or retain keys on the controller after saving or leaving the pane.
+	 */
+	saveRecognitionProviderKeys: async function () {
+		let scope = this._providerKeysScope;
+		if (!scope) return;
+		let revision = this._providerKeysRevision;
+		let status = document.getElementById('recognition-provider-keys-status');
+		this._setProviderKeysDisabled(true);
+		status.textContent = '';
+		try {
+			let keys = await Zotero.RecognizeDocument.getProviderCredentials(scope);
+			if (revision != this._providerKeysRevision) return;
+			for (let name of Zotero.RecognizeDocument.providerCredentialNames) {
+				if (this._providerKeysRemoved.has(name)) delete keys[name];
+				let value = document.getElementById('recognition-provider-key-' + name).value.trim();
+				if (value) keys[name] = value;
+			}
+			if (!!keys.worldcatClientID != !!keys.worldcatClientSecret) {
+				status.textContent = Zotero.getString('recognition-provider-worldcat-pair');
+				return;
+			}
+			await Zotero.RecognizeDocument.setProviderCredentials(keys, scope);
+			if (revision != this._providerKeysRevision) return;
+			await this._loadProviderKeysUI(true);
+			if (JSON.stringify(scope) == JSON.stringify(this._providerKeysScope)) {
+				status.textContent = Zotero.getString(Zotero.Prefs.get('recognize.engine') == 'epilib-local'
+					? 'recognition-provider-keys-saved-local' : 'recognition-provider-keys-saved');
+			}
+		}
+		catch {
+			if (revision == this._providerKeysRevision) {
+				status.textContent = Zotero.getString('recognition-provider-keys-save-failed');
+			}
+		}
+		finally {
+			if (revision == this._providerKeysRevision) this._setProviderKeysDisabled(false);
 		}
 	},
 

@@ -28,6 +28,7 @@ const symlinkFiles = [
 	// react-virtualized needs to be patched by babel-worker.js, so symlink all files in resource/ except for
 	// those. Babel transpilation is still disabled in .babelrc.
 	'resource/**/*',
+	'!resource/recognition-engine/**/*',
 	'!resource/react-virtualized.js',
 	// Only include dist directory of singleFile
 	// Also do a little bit of manipulation similar to react-virtualized

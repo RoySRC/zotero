@@ -337,6 +337,25 @@ describe('PDF recognition engines', function () {
 		finally { await attachment.eraseTx(); if (parent) await parent.eraseTx(); }
 	});
 
+	it('preserves a repository thesis ISBN without accepting arbitrary Extra text', async function () {
+		let attachment = await importPDFAttachment();
+		sandbox.stub(Zotero.PDFWorker, 'getRecognizerData').resolves({ pages: [[600, 800, ['text']]] });
+		sandbox.stub(Zotero.HTTP, 'request').resolves({ status: 200, responseText: JSON.stringify({
+			engine: 'epilib', version: 2, status: 'matched', item: { itemType: 'thesis',
+				title: 'Repository thesis', creators: [{ name: 'Ada Example' }], ISBN: '9162845462',
+				university: 'Lund University', thesisType: 'Doctoral thesis', extra: 'Do not import this text' }
+		}) });
+		let parent;
+		try {
+			parent = await recognizer._recognize(attachment);
+			assert.equal(parent.getField('ISBN'), '91-628-4546-2');
+			assert.equal(parent.getField('extra'), '');
+			assert.equal(parent.getField('thesisType'), 'Doctoral thesis');
+			assert.equal(parent.getField('university'), 'Lund University');
+		}
+		finally { await attachment.eraseTx(); if (parent) await parent.eraseTx(); }
+	});
+
 	it('saves complete preprint metadata while excluding provider identities and unsafe tag properties', async function () {
 		let attachment = await importPDFAttachment();
 		sandbox.stub(Zotero.PDFWorker, 'getRecognizerData').resolves({ pages: [[600, 800, ['text']]] });
@@ -386,6 +405,154 @@ describe('PDF recognition engines', function () {
 		assert.lengthOf(clean.tags, 100);
 	});
 
+	it('saves conference fields and generates stable distinct local citation keys, never provider ids', async function () {
+		let attachment = await importPDFAttachment();
+		let parents = [];
+		sandbox.stub(Zotero.PDFWorker, 'getRecognizerData').resolves({ pages: [[600, 800, ['text']]] });
+		let record = { itemType: 'conferencePaper', title: 'Language in a Bottle',
+			creators: [{ creatorType: 'author', firstName: 'Yue', lastName: 'Yang' }],
+			DOI: '10.1109/cvpr52729.2023.01839', date: '2023-6', proceedingsTitle: 'CVPR 2023',
+			conferenceName: 'IEEE/CVF Conference on Computer Vision and Pattern Recognition',
+			eventPlace: 'Vancouver, BC, Canada', pages: '19187-19197', publisher: 'IEEE',
+			citationKey: 'untrusted-provider-id' };
+		sandbox.stub(Zotero.HTTP, 'request').resolves({ status: 200, responseText: JSON.stringify({
+			engine: 'epilib', version: 2, status: 'matched', item: record
+		}) });
+		try {
+			for (let i = 0; i < 2; i++) {
+				let parent = await recognizer._recognize(attachment);
+				parents.push(parent);
+				for (let field of ['conferenceName', 'eventPlace', 'proceedingsTitle', 'pages']) {
+					assert.equal(parent.getField(field), record[field]);
+				}
+				assert.equal(parent.getField('citationKey'), `yang2023LanguageBottle-${parent.key}`);
+			}
+			assert.notEqual(parents[0].getField('citationKey'), parents[1].getField('citationKey'));
+		}
+		finally {
+			await attachment.eraseTx();
+			for (let parent of parents) await parent.eraseTx();
+		}
+	});
+
+	it('fills chapter authors and missing fields in place while preserving user metadata and citation keys', async function () {
+		let parent = await createDataObject('item', { itemType: 'bookSection', title: 'A mathematical guide to operator learning' });
+		parent.setField('DOI', '10.1016/bs.hna.2024.05.003');
+		parent.setField('bookTitle', 'User-edited book title');
+		parent.setField('citationKey', 'my-existing-key');
+		parent.setField('date', '2024');
+		await parent.saveTx();
+		let attachment = await importPDFAttachment(parent);
+		let original = attachment.toJSON(), key = parent.key;
+		let record = { itemType: 'bookSection', title: parent.getField('title'), DOI: parent.getField('DOI'),
+			creators: [{ creatorType: 'author', name: 'Nicolas Boull\u00e9' }, { creatorType: 'author', name: 'Alex Townsend' }],
+			bookTitle: 'Numerical Analysis Meets Machine Learning', series: 'Handbook of Numerical Analysis',
+			pages: '83-125', date: '2023', ISBN: '9780443239847' };
+		let request = sandbox.stub(Zotero.HTTP, 'request').resolves({ status: 200, responseText: JSON.stringify({
+			engine: 'epilib', version: 2, status: 'matched', item: record
+		}) });
+		sandbox.stub(recognizer, 'chooseRecognitionCandidate').callsFake(candidates => candidates[0].item);
+		try {
+			assert.isTrue(await recognizer.refreshPublishedMetadata(parent));
+			assert.equal(parent.key, key);
+			assert.equal(parent.getCreators()[0].lastName, 'Nicolas Boull\u00e9');
+			assert.equal(parent.getCreators()[1].lastName, 'Alex Townsend');
+			assert.equal(parent.getField('series'), record.series);
+			assert.equal(parent.getField('pages'), record.pages);
+			assert.equal(parent.getField('bookTitle'), 'User-edited book title');
+			assert.equal(parent.getField('citationKey'), 'my-existing-key');
+			assert.equal(parent.getField('date'), '2024');
+			assert.deepEqual(attachment.toJSON(), original);
+			assert.equal(JSON.parse(request.firstCall.args[2].body).metadata.DOI, record.DOI);
+			parent.setField('citationKey', '');
+			await parent.saveTx();
+			await recognizer.refreshPublishedMetadata(parent);
+			let generated = parent.getField('citationKey');
+			assert.match(generated, /^boulle2024mathematicalguideoperator-/);
+			await recognizer.refreshPublishedMetadata(parent);
+			assert.equal(parent.getField('citationKey'), generated);
+		}
+		finally { await parent.eraseTx(); }
+	});
+
+	it('refresh cannot downgrade a publication or substitute another DOI, and cancellation changes nothing', async function () {
+		let parent = await createDataObject('item', { itemType: 'conferencePaper', title: 'Existing publication' });
+		parent.setField('DOI', '10.1234/published');
+		await parent.saveTx();
+		let before = parent.toJSON();
+		let record = { itemType: 'conferencePaper', title: 'Existing publication', creators: [], DOI: '10.1234/other' };
+		let query = sandbox.stub(recognizer, 'queryPDFMetadata').resolves({ status: 'matched', item: record });
+		let choice = sandbox.stub(recognizer, 'chooseRecognitionCandidate').returns(null);
+		try {
+			assert.include((await getPromiseError(recognizer.refreshPublishedMetadata(parent))).message, 'No verified');
+			query.resolves({ status: 'matched', item: { ...record, itemType: 'preprint', DOI: '10.1234/published' } });
+			assert.include((await getPromiseError(recognizer.refreshPublishedMetadata(parent))).message, 'No verified');
+			assert.isFalse(choice.called);
+			query.resolves({ status: 'matched', item: { ...record, DOI: '10.1234/published' } });
+			assert.isFalse(await recognizer.refreshPublishedMetadata(parent));
+			assert.deepEqual(parent.toJSON(), before);
+		}
+		finally { await parent.eraseTx(); }
+	});
+
+	it('retains unconfigured catalog status without accepting unknown provider states', async function () {
+		let item = { itemType: 'book', title: 'A source', creators: [] };
+		let review = { sources: [{ id: 'source-1', label: 'Open Library', item, mergeFields: [] }],
+			custom: { item, fieldSources: {} }, providers: [
+				{ name: 'Google Books', status: 'not_configured' }, { name: 'Injected', status: 'unknown' }
+			] };
+		sandbox.stub(Zotero.HTTP, 'request').resolves({ status: 200,
+			responseText: JSON.stringify({ engine: 'epilib', version: 2, status: 'matched', item, review }) });
+		let result = await recognizer.queryPDFMetadata(payload);
+		assert.deepEqual(result.review.providers, [{ name: 'Google Books', status: 'not_configured' }]);
+	});
+
+	it('validates every comparison source and strips identity-changing Custom field controls', async function () {
+		let item = { itemType: 'conferencePaper', title: 'A source', creators: [], DOI: '10.1234/source',
+			pages: '1-12', libraryID: 999, key: 'UNTRUSTD' };
+		let review = { sources: [{ id: 'source-1', label: 'Crossref', item,
+			mergeFields: ['pages', 'DOI', 'itemType', 'libraryID', 'key', '__proto__'] }],
+			custom: { item, fieldSources: { pages: 'source-1', title: 'missing-source', libraryID: 'source-1' } },
+			providers: [{ name: 'Crossref', status: 'matched' }, { name: 'bad', status: 'invented' }] };
+		let http = sandbox.stub(Zotero.HTTP, 'request').callsFake(async () => ({ status: 200,
+			responseText: JSON.stringify({ engine: 'epilib', version: 2, status: 'matched', item, review }) }));
+		let result = await recognizer.queryPDFMetadata(payload);
+		assert.deepEqual(result.review.sources[0].mergeFields, ['pages']);
+		assert.isUndefined(result.review.sources[0].item.key);
+		assert.isUndefined(result.review.custom.item.libraryID);
+		assert.deepEqual(result.review.custom.fieldSources, { pages: 'source-1' });
+		assert.lengthOf(result.review.providers, 1);
+		review.sources.push(review.sources[0]);
+		assert.include((await getPromiseError(recognizer.queryPDFMetadata(payload))).message, 'supported PDF recognition response');
+		review.sources.pop(); review.sources[0].id = 'custom';
+		assert.include((await getPromiseError(recognizer.queryPDFMetadata(payload))).message, 'supported PDF recognition response');
+		assert.isTrue(http.called);
+	});
+
+	it('replaces existing bibliographic values only after explicit selection while keeping citation and item identity', async function () {
+		let parent = await createDataObject('item', { itemType: 'conferencePaper', title: 'Existing title' });
+		parent.setField('DOI', '10.1234/paper');
+		parent.setField('citationKey', 'UserCitationKey');
+		await parent.saveTx();
+		let key = parent.key;
+		let record = { itemType: 'conferencePaper', title: 'Selected source title', creators: [],
+			DOI: '10.1234/paper', pages: '1-12' };
+		let query = sandbox.stub(recognizer, 'queryPDFMetadata').resolves({ status: 'matched', item: record });
+		sandbox.stub(recognizer, 'chooseRecognitionCandidate').callsFake((candidates, options) => {
+			assert.isTrue(options.refresh);
+			options.replaceExisting = true;
+			return record;
+		});
+		try {
+			await recognizer.refreshPublishedMetadata(parent);
+			assert.isTrue(query.firstCall.args[0].includeAlternatives);
+			assert.equal(parent.getField('title'), record.title);
+			assert.equal(parent.getField('citationKey'), 'UserCitationKey');
+			assert.equal(parent.key, key);
+		}
+		finally { await parent.eraseTx(); }
+	});
+
 	it('retains validated alternate arXiv identifiers and displays publication type and venue', async function () {
 		let item = { itemType: 'conferencePaper', title: 'Label-Free Concept Bottleneck Models',
 			creators: [{ name: 'Tuomas Oikarinen' }], date: '2023', proceedingsTitle: 'ICLR 2023',
@@ -394,15 +561,15 @@ describe('PDF recognition engines', function () {
 			responseText: JSON.stringify({ engine: 'epilib', version: 2, status: 'matched', item }) });
 		let record = (await recognizer.queryPDFMetadata(payload)).item;
 		assert.equal(record.extra, 'arXiv: 2304.06129');
-		let prompt = sinon.stub().returns(2);
-		let originalPrompt = Services.prompt;
-		try {
-			Services.prompt = { confirmEx: prompt };
-			assert.isNull(recognizer.chooseRecognitionCandidate([{ item: record }]));
-			assert.include(prompt.firstCall.args[2], 'Conference Paper');
-			assert.include(prompt.firstCall.args[2], 'ICLR 2023');
-		}
-		finally { Services.prompt = originalPrompt; }
+		let opened = waitForWindow('chrome://zotero/content/recognitionReview.xhtml', dialog => {
+			try {
+				assert.include(dialog.document.getElementById('recognition-review-summary').textContent, 'Conference Paper');
+				assert.include(dialog.document.getElementById('recognition-review-fields').textContent, 'ICLR 2023');
+			}
+			finally { dialog.close(); }
+		});
+		assert.isNull(recognizer.chooseRecognitionCandidate([{ item: record }]));
+		await opened;
 		item.alternateIdentifiers.arxiv = '2304.06129\nDOI: injected';
 		http.resolves({ status: 200, responseText: JSON.stringify({ engine: 'epilib', version: 2, status: 'matched', item }) });
 		assert.isUndefined((await recognizer.queryPDFMetadata(payload)).item.extra);
@@ -482,6 +649,12 @@ describe('PDF recognition engines', function () {
 			let menu = win.document.querySelector('.zotero-menuitem-refresh-publication');
 			assert.isFalse(menu.hidden);
 			assert.equal(menu.label, 'Update to Published Version...');
+			parent.setType(Zotero.ItemTypes.getID('bookSection'));
+			parent.setField('DOI', '10.1016/bs.hna.2024.05.003');
+			await parent.saveTx();
+			await win.ZoteroPane.buildItemContextMenu();
+			assert.isFalse(menu.hidden);
+			assert.equal(menu.label, 'Refresh Metadata...');
 			Zotero.Prefs.set('recognize.engine', 'zotero');
 			await win.ZoteroPane.buildItemContextMenu();
 			assert.isTrue(menu.hidden);
