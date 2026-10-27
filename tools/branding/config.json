@@ -6,7 +6,8 @@
     "ID": "zotero",
     "GUID": "zotero@zotero.org",
     "PREF_BRANCH": "extensions.zotero.",
-    "DATA_DIRECTORY_NAME": "Zotero"
+    "DATA_DIRECTORY_NAME": "EpiLib",
+    "BUNDLE_ID": "org.epilib.epilib"
   },
   "externalResourceKeys": [
     "install.quickStartGuide", "upgrade.nonupgradeableDB2", "dataDir.incompatibleDbVersion.text",
@@ -25,7 +26,9 @@
     { "file": "chrome/content/zotero/xpcom/error.js", "value": "Zotero Error", "reason": "Cross-window error dispatch identifier used by sync; not a display label" }
   ],
   "literalOverrides": {
-    "resource/config.mjs": [["CLIENT_NAME: 'Zotero'", "CLIENT_NAME: '{product}'"]],
+    "resource/config.mjs": [["CLIENT_NAME: 'Zotero'", "CLIENT_NAME: '{product}'"], ["DATA_DIRECTORY_NAME: 'Zotero'", "DATA_DIRECTORY_NAME: '{product}'"]],
+    "app/assets/application.ini": [["Name=Zotero\n", "Name={product}\n"], ["Vendor=Zotero\n", "Vendor={product}\n"]],
+    "app/mac/Contents/Info.plist": [["<string>org.zotero.zotero</string>", "<string>org.epilib.epilib</string>"]],
     "app/assets/branding/locale/brand.dtd": [["\"Zotero\"", "\"{product}\""]],
     "app/assets/branding/locale/brand.properties": [["=Zotero", "={product}"]],
     "app/assets/branding/locale/brand.ftl": [
@@ -49,14 +52,14 @@
     "package.json": [["\"description\": \"Zotero\"", "\"description\": \"{product} research library\""]]
   },
   "requiredSourcePatterns": {
-    "resource/config.mjs": ["CLIENT_NAME: 'EpiLib'", "DATA_DIRECTORY_NAME: 'Zotero'", "DOWNLOAD_URL: \"https://epilib\\.org/downloads\"", "SUPPORT_URL: \"https://epilib\\.org/\""],
+    "resource/config.mjs": ["CLIENT_NAME: 'EpiLib'", "DATA_DIRECTORY_NAME: 'EpiLib'", "BUNDLE_ID: 'org.epilib.epilib'", "DOWNLOAD_URL: \"https://epilib\\.org/downloads\"", "SUPPORT_URL: \"https://epilib\\.org/\""],
     "chrome/content/zotero/xpcom/dataDirectory.js": ["ZOTERO_CONFIG.DATA_DIRECTORY_NAME"],
     "chrome/content/zotero/xpcom/error.js": ["Zotero\\.Error\\.prototype\\.name = \"Zotero Error\""],
-    "app/assets/application.ini": ["^Name=Zotero$", "^Vendor=Zotero$", "^ID=zotero@zotero\\.org$", "^URL=$"],
+    "app/assets/application.ini": ["^Name=EpiLib$", "^Vendor=EpiLib$", "^ID=zotero@zotero\\.org$", "^URL=$"],
     "app/assets/prefs.js": ["^pref\\(\"app\\.update\\.auto\", false\\);$"],
     "app/assets/branding/locale/brand.properties": ["^brandShortName=EpiLib$", "^brandFullName=EpiLib$"],
     "app/assets/branding/locale/brand.ftl": ["^-brand-full-name = EpiLib$"],
-    "app/mac/Contents/Info.plist": ["<key>CFBundleDisplayName</key>\\s*<string>EpiLib</string>", "<key>CFBundleIconFile</key>\\s*<string>epilib\\.icns</string>"],
+    "app/mac/Contents/Info.plist": ["<key>CFBundleDisplayName</key>\\s*<string>EpiLib</string>", "<key>CFBundleIdentifier</key>\\s*<string>org\\.epilib\\.epilib</string>", "<key>CFBundleIconFile</key>\\s*<string>epilib\\.icns</string>"],
     "app/linux/zotero.desktop": ["^Name=EpiLib$", "x-scheme-handler/zotero"],
     "app/win/installer/defines.nsi": ["BrandShortName\\s+\"EpiLib\"", "InstallerRegistryKey\\s+\"Software\\\\EpiLib\"", "AppPathAlias\\s+\"EpiLib\\.exe\""],
     "app/win/installer/app.tag": ["Title=\"EpiLib\""],

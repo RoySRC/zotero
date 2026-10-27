@@ -19,13 +19,15 @@ license and third-party attribution notices remain in place.
 ## Deliberately Retained
 
 Service URLs (except the intentionally replaced desktop binary update feed), email addresses, HTTP headers, OAuth configuration,
-bundle IDs, extension IDs, signing identities, URL schemes, command names,
+extension IDs, URL schemes, command names,
 JavaScript namespaces, resource keys, WebDAV paths, filenames, database names,
-login-manager realms, preference keys and existing profile/data directory paths
+login-manager realms and preference keys
 are not product display labels. Renaming them could break existing installations.
 The internal `Zotero Error` name is also preserved: sync uses it for error dispatch.
-`application.ini` keeps its Mozilla Name/Vendor/ID for profile compatibility.
-`CLIENT_NAME` is now separate from `DATA_DIRECTORY_NAME`.
+`application.ini` uses EpiLib for Name/Vendor so normal launches select independent
+profiles and caches. Its application ID remains compatible with existing extensions;
+that ID is not the profile-directory name. The macOS bundle identifier is
+`org.epilib.epilib` (with a build-channel suffix for development/beta builds).
 
 References to actual external services such as Zotero Storage, zotero.org
 accounts, upstream documentation, the Zotero RDF format and upstream credits
@@ -33,8 +35,22 @@ retain their correct names. Mobile backend behavior is unchanged by this rebrand
 
 The macOS build creates `app/staging/EpiLib.app` and a `Zotero.app` symlink in the
 same staging directory for existing development launchers. The executable remains
-`Contents/MacOS/zotero`. Renaming does not isolate an installation's profile;
-continue using the custom launcher or explicit `-profile` and `-datadir` options.
+`Contents/MacOS/zotero` for existing launchers. Normal launches now use independent
+EpiLib profile and data directories; no custom launcher is required for isolation.
+Explicit `-profile` and `-datadir` arguments still override the defaults. An old
+launcher with explicit Zotero paths will therefore keep using those paths.
+
+### Fresh Profiles and Data
+
+EpiLib does not automatically copy, migrate, or open official Zotero's profiles or
+libraries. A fresh installation starts logged out; saved account tokens and API
+keys in another profile are not imported. Existing directories remain untouched.
+On macOS, the defaults are `~/Library/Application Support/EpiLib/Profiles/`,
+`~/Library/Caches/EpiLib/`, and `~/EpiLib/` for the library and attachment storage.
+On Windows and Linux, Gecko derives the profile roots from the EpiLib Name/Vendor.
+The library defaults to `EpiLib` in the user's home directory on all platforms.
+The internal database filename stays `zotero.sqlite` for schema/tool compatibility;
+it lives inside the isolated EpiLib directory, not the official Zotero library.
 Native Zotero binary updates are disabled in assembled runtimes and their updater
 executables are omitted. EpiLib release notifications use GitHub Releases; see
 `tools/updates/README.md`. Translator/style repository updates and existing user
@@ -61,10 +77,9 @@ overwritten. The compatible `zotero://` scheme is registered only if unclaimed
 or already owned by that installation. Opening old links still uses the current
 OS-selected handler; users can choose the app through Windows default-app settings.
 
-This isolates **installation and removal**, not runtime profile selection or the
-shared connector port. Runtime Name/Vendor, existing profile/data paths and
-document identifiers remain unchanged. Continue using an explicit custom profile
-and data-directory launcher when running both applications side by side.
+Installation/removal and default runtime profiles are isolated. The connector
+port and document identifiers remain compatible, so simultaneous connector access
+is still a separate concern from profile and data-directory isolation.
 
 Run `node --test tools/branding/windows-installer.test.mjs` on any host. On
 Windows, `tools/branding/test-windows-isolation.ps1` compiles the production NSIS
@@ -218,6 +233,31 @@ shipped 16-pixel SVGs. They cover both Refresh Metadata and Update to Published
 Version on preprints, plus Refresh Metadata on DOI-less published items. These
 tests use the runner's disposable profile, not the user's library. Both branding
 and upstream-integration workflows require these suites.
+
+Profile and library isolation has three complementary test layers:
+
+```sh
+node --test tools/branding/profile-isolation.test.mjs tools/branding/scratch-isolation.test.mjs
+python3 tools/branding/test_profile_package.py
+CI=1 test/runtests.sh -f -b epilibProfileIsolation epilibBranding dataDirectory profile
+```
+
+The Node tests execute the production directory selector and profile discovery
+against disposable homes. They cover fresh startup, restart, explicit-path
+precedence, missing/invalid paths, multiple profiles, profile-local libraries,
+database/backup/supporting paths, and preservation of old credentials and PDFs.
+Scratch tests execute the real creation and shutdown callbacks for simulated
+macOS, Windows and Linux paths, including the system-temp fallback.
+
+The native integration suite uses Gecko file APIs and real SQLite databases,
+reopens a library after reloading the startup modules, and imports a real PDF
+through the attachment API in the test runner's disposable library. Production
+profiles, account tokens and OS-keychain entries are never read or changed.
+The package tests deliberately introduce old Name/Vendor, data-directory and
+bundle identities, and incompatible internal IDs, ensuring the release gate
+rejects each regression. All three layers run in the branding gate inherited by
+the upstream integration workflow. Platform simulations are not a substitute
+for native Windows/Linux release smoke tests.
 
 `apply.mjs` without `--check` writes the reviewed overlay. `--base <commit>` may
 restore approved artwork from that target commit. Neither command merges or

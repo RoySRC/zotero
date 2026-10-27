@@ -164,7 +164,7 @@
 	<key>CFBundleIconFile</key>
 	<string>epilib.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.zotero.zotero</string>
+	<string>org.epilib.epilib</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

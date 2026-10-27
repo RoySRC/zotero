@@ -49,6 +49,7 @@ recognition-review-value = Value
 recognition-review-source = Source
 recognition-review-replace = Replace existing field values
 recognition-review-different-version = This source describes a different publication version and cannot replace this item.
+recognition-review-preprint-not-publication = This source is a preprint, not a published record.
 recognition-review-status-matched = Match found
 recognition-review-status-no_match = No matching record
 recognition-review-status-unavailable = Lookup unavailable

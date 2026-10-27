@@ -25,7 +25,7 @@ test('publication is isolated, pinned, non-forcing and limited to rebranding', (
 		}
 		const suites = text.match(/test\/runtests\.sh -f -b ([^\n]+)/)[1].split(' ');
 		for (const required of ['epilibUpdates', 'epilibBranding', 'epilibSyncIsolation', 'recognitionEngine', 'metadataMenuIcons',
-			'preferences_account', 'storageLocal', 'webdav', 'syncLocal', 'syncEngine', 'syncRunner']) {
+			'publicationTitleVariant', 'preferences_account', 'storageLocal', 'webdav', 'syncLocal', 'syncEngine', 'syncRunner']) {
 			assert.ok(suites.includes(required), `Missing required suite: ${required}`);
 		}
 		assert.ok(text.includes("-g 'standalone PDF by ISBN' recognizeDocument"));

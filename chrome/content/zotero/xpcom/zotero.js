@@ -1083,13 +1083,13 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 			dir = Services.dirsvc.get("TmpD", Ci.nsIFile);
 			let relDir;
 			if (Zotero.isWin) {
-				relDir = 'Zotero';
+				relDir = ZOTERO_CONFIG.DATA_DIRECTORY_NAME;
 			}
 			else if (Zotero.isMac) {
-				relDir = 'org.zotero.zotero';
+				relDir = ZOTERO_CONFIG.BUNDLE_ID;
 			}
 			else {
-				relDir = 'zotero';
+				relDir = ZOTERO_CONFIG.DATA_DIRECTORY_NAME.toLowerCase();
 			}
 			dir.append(relDir);
 			Zotero.File.createDirectoryIfMissing(dir);

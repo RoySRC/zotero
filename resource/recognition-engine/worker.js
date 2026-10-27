@@ -5510,6 +5510,9 @@
   }
   function sameWork(a, b) {
     if (!titleKey(a.title) || titleKey(a.title) != titleKey(b.title)) return false;
+    return sameAuthors(a, b);
+  }
+  function sameAuthors(a, b) {
     function names2(item) {
       return (item.creators || []).filter((c) => c.creatorType == "author").map((c) => {
         let parts = plainText(c.name || "").split(/\s+/);
@@ -5528,6 +5531,19 @@
       right.splice(index, 1);
     }
     return true;
+  }
+  function publicationTitleVariant(a, b) {
+    if (!a || !b || !(a.itemType == "preprint" && isPublished(b) || b.itemType == "preprint" && isPublished(a))) return false;
+    let left = titleKey(a.title), right = titleKey(b.title);
+    if (!left || !right || left == right || !sameAuthors(a, b)) return false;
+    let negations = /* @__PURE__ */ new Set(["no", "not", "without", "non", "versus", "vs"]);
+    let wordsA = left.split(" "), wordsB = right.split(" ");
+    if ([...negations].some((word) => wordsA.includes(word) != wordsB.includes(word))) return false;
+    let stopWords = /* @__PURE__ */ new Set(["a", "an", "the", "of", "for", "in", "on", "and", "to", "with", "by", "from", "as"]);
+    let termsA = new Set(wordsA.filter((word) => !stopWords.has(word)));
+    let termsB = new Set(wordsB.filter((word) => !stopWords.has(word)));
+    let shared = [...termsA].filter((word) => termsB.has(word)).length;
+    return shared >= 4 && shared / (/* @__PURE__ */ new Set([...termsA, ...termsB])).size >= 0.6;
   }
   function publishedVersion(preprint, publication) {
     let arxiv = plainText(preprint.archiveID).replace(/^arxiv:/i, "").replace(/v\d+$/i, "");
@@ -5589,6 +5605,7 @@
 
   // src/review.mjs
   function relatedRecord(primary, source) {
+    if (publicationTitleVariant(primary, source)) return true;
     let sameEdition = primary.itemType == "book" && source?.itemType == "book" && editionKey(primary.ISBN) && editionKey(primary.ISBN) == editionKey(source.ISBN);
     return !!source && !!titleKey(primary.title) && titleKey(primary.title) == titleKey(source.title) && (sameEdition || sameWork(primary, source) || supplementFields(primary, source).length > 0 || supplementFields(source, primary).length > 0);
   }
@@ -9183,7 +9200,8 @@
         if (!googleBooksKey) results.push({ name: "Google Books", status: "not_configured", records: [] });
         if (item.itemType == "book" && !worldcat.configured) results.push({ name: "WorldCat", status: "not_configured", records: [] });
         let records = Array.from({ length: 5 }, (_, index) => results.flatMap((r) => r.records[index] ? [{ label: r.name, item: r.records[index] }] : [])).flat();
-        records.push(...candidates.map((c) => ({ item: c.item, label: c.item.libraryCatalog || "Recognition result" })));
+        records.unshift(...candidates.filter((c) => c.evidence?.titleVariant).map((c) => ({ item: c.item, label: c.item.libraryCatalog || "Recognition result" })));
+        records.push(...candidates.filter((c) => !c.evidence?.titleVariant).map((c) => ({ item: c.item, label: c.item.libraryCatalog || "Recognition result" })));
         return buildReview(item, records, results.map(({ name, status }) => ({ name, status })));
       },
       /** Resolve a canonical identifier and verify returned identity before accepting it. */
@@ -9445,14 +9463,21 @@
        * v1/v2 indexes. Only normalized title/complete byline comparisons authorize
        * an upgrade. No link supplied by a PDF/provider is fetched directly.
        * Failure is nonfatal and never cached as proof that publication is absent.
+       * Changed-title candidates use a separate reviewCandidates array: they
+       * neither authorize an upgrade nor stop the search for a verified record.
        */
       async publishedVersions(preprint, { deadline = Infinity } = {}) {
         let budget = { deadline: Math.min(deadline, Date.now() + 6e3), timeout: 2e3 };
-        let items = [], incomplete = false;
+        let items = [], reviewCandidates = [], incomplete = false;
         async function attempt(url, map) {
           try {
             let data = await request(url, false, budget);
-            if (data) items.push(...map(data).filter(Boolean).map((item) => supplement(item, preprint).item).filter((item) => isPublished(item) && sameWork(preprint, item)));
+            for (let item of data ? map(data).filter(Boolean) : []) {
+              let completed = supplement(item, preprint).item;
+              if (isPublished(completed) && sameWork(preprint, completed)) {
+                items.push(completed);
+              } else if (publicationTitleVariant(preprint, item)) reviewCandidates.push(item);
+            }
           } catch {
             incomplete = true;
           }
@@ -9463,7 +9488,7 @@
             let item = fromCrossref(data.message);
             return item?.DOI == doi2 ? [item] : [];
           });
-          if (items.length) return { items, incomplete };
+          if (items.length) return { items, reviewCandidates, incomplete };
         }
         let query = new URLSearchParams({
           "query.title": preprint.title.slice(0, 500),
@@ -9474,7 +9499,7 @@
           if (!Array.isArray(data.message?.items)) throw new Error("Invalid Crossref response");
           return data.message.items.slice(0, 5).map(fromCrossref);
         });
-        if (items.length) return { items, incomplete };
+        if (items.length) return { items, reviewCandidates, incomplete };
         query = new URLSearchParams({ term: preprint.title.slice(0, 500), content: "title", source: "forum", limit: "5" });
         for (let host of ["api.openreview.net", "api2.openreview.net"]) {
           await attempt(`https://${host}/notes/search?${query}`, (data) => {
@@ -9483,7 +9508,7 @@
           });
           if (items.length) break;
         }
-        return { items, incomplete };
+        return { items, reviewCandidates, incomplete };
       }
     };
   }
@@ -9536,16 +9561,26 @@
           }
         }
         let publications = [...new Map((result2.items || []).filter((candidate) => isPublished(candidate) && sameWork(item, candidate)).map((candidate) => [candidate.DOI || candidate.url, publishedVersion(item, candidate)])).values()];
+        let reviewCandidates = publications.length ? [] : [...new Map((result2.reviewCandidates || []).filter((candidate) => publicationTitleVariant(item, candidate)).map((candidate) => [candidate.DOI || candidate.url, candidate])).values()].slice(0, 4);
         if (publications.length && !cached) await store.put(key, { items: publications });
         let completed = publications.length == 1 ? await complete(publications[0]) : null;
         return {
           items: completed?.items || (publications.length ? publications : [item]),
+          reviewCandidates,
           evidence: {
             publicationLookup: result2.incomplete ? "incomplete" : "complete",
             ...completed?.evidence,
             ...publications.length ? { repositoryVersion: item.url, sameWork: true } : {}
           }
         };
+      }
+      function reviewChoices(enriched, evidence) {
+        return enriched.items.map((item) => ({ item, evidence })).concat(
+          (enriched.reviewCandidates || []).map((item) => ({
+            item,
+            evidence: { ...evidence, titleVariant: true }
+          }))
+        );
       }
       let lookup = !ambiguous || identifiers2.every((identifier) => identifier.isbn) ? identifiers2.slice(0, 5) : [];
       let editionCandidates = [], conflicts = [], lookupError;
@@ -9577,11 +9612,11 @@
           evidence = { ...evidence, ...enriched.evidence };
           let selected = enriched.items[0];
           if (ambiguous) {
-            editionCandidates.push(...enriched.items.map((item2) => ({ item: item2, evidence })));
+            editionCandidates.push(...reviewChoices(enriched, evidence));
             continue;
           }
-          if (enriched.items.length > 1 || publicationHint && selected.itemType == "preprint" || publicationConflict(publicationHint, selected)) {
-            return { ...envelope, status: "needs_review", candidates: enriched.items.slice(0, 5).map((item2) => ({ item: item2, evidence })) };
+          if (enriched.reviewCandidates?.length || enriched.items.length > 1 || publicationHint && selected.itemType == "preprint" || publicationConflict(publicationHint, selected)) {
+            return { ...envelope, status: "needs_review", candidates: reviewChoices(enriched, evidence).slice(0, 5) };
           }
           return { ...envelope, status: "matched", item: selected, evidence: { ...evidence, provider: selected.libraryCatalog } };
         }
@@ -9620,6 +9655,13 @@
       let best = ranked.item || ranked.candidates?.[0]?.item;
       if (best) {
         let enriched = await enrich(best);
+        if (enriched.reviewCandidates?.length) {
+          let evidence = { ...ranked.evidence || ranked.candidates[0].evidence, ...enriched.evidence };
+          let candidates = reviewChoices(enriched, evidence).concat(
+            (ranked.candidates || []).filter((candidate) => candidate.item != best)
+          );
+          return { ...envelope, status: "needs_review", candidates: candidates.slice(0, 5) };
+        }
         items = items.filter((item) => item != best).concat(enriched.items);
       }
       let byID = /* @__PURE__ */ new Map();
@@ -9646,10 +9688,11 @@
       if (result.status != "no_match" && (data.includeAlternatives === true || result.status == "needs_review")) {
         let primary = result.item || result.candidates[0].item;
         let candidates = result.candidates || [];
+        let records = candidates.map((c) => ({ item: c.item, label: c.item.libraryCatalog || "Recognition result" }));
         try {
-          result.review = mode != "local" && providers.review ? await providers.review(primary, budget, candidates) : buildReview(primary, candidates.map((c) => ({ item: c.item, label: c.item.libraryCatalog || "Recognition result" })));
+          result.review = mode != "local" && providers.review ? await providers.review(primary, budget, candidates) : buildReview(primary, records);
         } catch {
-          result.review = buildReview(primary);
+          result.review = buildReview(primary, records);
         }
       }
       return result;
@@ -9951,7 +9994,16 @@
         } catch {
         }
       }
-      if (result) return result;
+      if (result) {
+        if (data.includeAlternatives === true && result.candidates.every((candidate) => candidate.item.itemType == "preprint")) {
+          try {
+            const comparison = await recognize(data);
+            if (comparison && comparison.status != "no_match") return comparison;
+          } catch {
+          }
+        }
+        return result;
+      }
       result = await recognize(data);
       if (result?.status == "matched") {
         try {

@@ -1,5 +1,7 @@
-/* global Zotero, window, document */
+// The XUL onload handler and dialog callers access this window-global controller.
+// eslint-disable-next-line no-unused-vars
 var Zotero_Recognition_Review = {
+
 	/** Bind a modal snapshot; all edits remain in memory until explicit acceptance. */
 	init() {
 		this.io = window.arguments[0].wrappedJSObject || window.arguments[0];
@@ -21,7 +23,7 @@ var Zotero_Recognition_Review = {
 			let label = source.id == 'recognized' ? this.sourceLabel(source) : `${this.sourceLabel(source)} (${type})`;
 			select.appendChild(this.element('option', label, { value: source.id, title: `${type}: ${source.item.title}` }));
 		}
-		select.value = 'custom';
+		select.value = this.initialSourceID();
 		select.addEventListener('change', () => this.render());
 		document.getElementById('recognition-review-replace-row').hidden = !this.io.refresh;
 		let status = document.getElementById('recognition-review-provider-status');
@@ -29,7 +31,7 @@ var Zotero_Recognition_Review = {
 			status.appendChild(this.element('p', provider.name + ': '
 				+ Zotero.getString('recognition-review-status-' + provider.status)));
 		}
-		document.addEventListener('dialogaccept', event => {
+		document.addEventListener('dialogaccept', (event) => {
 			if (!this.accept()) event.preventDefault();
 		});
 		this.render();
@@ -47,6 +49,27 @@ var Zotero_Recognition_Review = {
 	/** The recognized fallback may already combine providers; never label it a raw source. */
 	sourceLabel(source) {
 		return source.id == 'recognized' ? Zotero.getString('recognition-review-result') : source.label;
+	},
+
+	/**
+	 * Choose the first record to DISPLAY, not a record to apply to the library.
+	 *
+	 * The recognition engine intentionally keeps Custom based on the preprint
+	 * when a differently titled publication needs manual review. Always opening
+	 * on Custom would therefore show a rejection warning and a disabled button
+	 * even though a usable publication is present in the source list.
+	 *
+	 * Prefer Custom when it satisfies this action's existing type/DOI rules;
+	 * otherwise display the first source that satisfies those same rules. Do not
+	 * rebuild Custom, merge versions, relax canAccept(), or set io.out here.
+	 * The user must still confirm with Use This Record. If nothing is eligible,
+	 * leave Custom inspectable and let render()/accept() keep saving blocked.
+	 *
+	 * @returns {string} Source-list option ID to show when the dialog opens.
+	 */
+	initialSourceID() {
+		if (this.canAccept(this.custom)) return 'custom';
+		return this.review.sources.find(source => this.canAccept(source.item))?.id || 'custom';
 	},
 
 	/** Read selection without mutating the source records or caller's live library item. */
@@ -114,7 +137,16 @@ var Zotero_Recognition_Review = {
 		this.dialog.getButton('accept').disabled = !allowed;
 		let warning = document.getElementById('recognition-review-warning');
 		warning.hidden = allowed;
-		warning.textContent = allowed ? '' : Zotero.getString('recognition-review-different-version');
+		// A preprint remains useful for comparison but is not a published upgrade.
+		// Explain that specific restriction instead of implying the publication
+		// lookup failed. Other type/DOI conflicts retain the existing warning.
+		let preprintBlocked = item.itemType == 'preprint' && this.io.allowedTypes
+			&& !this.io.allowedTypes.includes('preprint');
+		warning.textContent = allowed
+			? ''
+			: Zotero.getString(preprintBlocked
+				? 'recognition-review-preprint-not-publication'
+				: 'recognition-review-different-version');
 		let body = document.getElementById('recognition-review-fields');
 		body.replaceChildren();
 		let fields = ['itemType', 'title', 'creators', ...Zotero.ItemFields.getItemTypeFields(Zotero.ItemTypes.getID(item.itemType))

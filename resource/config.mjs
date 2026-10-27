@@ -2,8 +2,10 @@ export var ZOTERO_CONFIG = {
 	GUID: 'zotero@zotero.org',
 	ID: 'zotero', // used for db filename, etc.
 	CLIENT_NAME: 'EpiLib',
-	// Keep existing data directories discoverable across the display-name change.
-	DATA_DIRECTORY_NAME: 'Zotero',
+	// Filesystem and OS application identities are isolated from official Zotero.
+	// Keep database/protocol identifiers above stable for import and extension compatibility.
+	DATA_DIRECTORY_NAME: 'EpiLib',
+	BUNDLE_ID: 'org.epilib.epilib',
 	DOMAIN_NAME: 'zotero.org',
 	PRODUCER: 'Digital Scholar',
 	PRODUCER_URL: 'https://digitalscholar.org',

@@ -40,13 +40,14 @@ Zotero.DataDirectory = {
 	get defaultDir() {
 		// Use special data directory for tests
 		if (CommandLineOptions.test) {
-			return OS.Path.join(PathUtils.parent(OS.Constants.Path.profileDir), "Zotero");
+			return OS.Path.join(PathUtils.parent(OS.Constants.Path.profileDir), ZOTERO_CONFIG.DATA_DIRECTORY_NAME);
 		}
 		return OS.Path.join(OS.Constants.Path.homeDir, ZOTERO_CONFIG.DATA_DIRECTORY_NAME);
 	},
 	
 	get legacyDirName() {
-		return ZOTERO_CONFIG.ID;
+		// Profile-local discovery must not adopt an old Zotero library implicitly.
+		return ZOTERO_CONFIG.DATA_DIRECTORY_NAME.toLowerCase();
 	},
 	
 	_dir: null,
@@ -196,19 +197,19 @@ Zotero.DataDirectory = {
 				Zotero.logError(e);
 			}
 			
-			// Check for ~/Zotero/zotero.sqlite
+			// Check only the EpiLib default, never another application's library.
 			let dbFile = OS.Path.join(dataDir, dbFilename);
 			if (await OS.File.exists(dbFile)) {
 				Zotero.debug("Using data directory " + dataDir);
 				this._cache(dataDir);
 				
-				// Set as a custom data directory so that 4.0 uses it
+				// Persist the selection for subsequent launches.
 				this.set(dataDir);
 				
 				return dataDir;
 			}
 			
-			// Check for <profile dir>/zotero/zotero.sqlite (Zotero Standalone <5.0)
+			// Also support an explicitly profile-local EpiLib library.
 			try {
 				let dir = OS.Path.join(Zotero.Profile.dir, this.legacyDirName);
 				let dbFile = OS.Path.join(dir, dbFilename);

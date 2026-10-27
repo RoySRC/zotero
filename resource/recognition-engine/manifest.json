@@ -1,9 +1,9 @@
 {
   "version": "0.2.0",
   "commit": "684411ee805cdc7db98a338fdd914b946700725c",
-  "sourceDigest": "74c605a713074870f83615177beace7e01fd9bf8642eaefda797e8d98eac3c8b",
+  "sourceDigest": "18d476e408c8f949692dd3bb437041181fb65f0ab9aa28bfa10bfc3bf153b40d",
   "files": {
-    "worker.js": "ba3001af064c9dae3b2e7c0d367d77cb2fd05b55ed68eab4e63b8970a115b08f",
+    "worker.js": "0fd10736c418f277b7208d804a613e39f2896326c5001b64cbba15b8583dd753",
     "host.mjs": "6f7ca7bd731d86c47bab20bd91bacd94c7c82c350d4b02d46cb00e0cef63f2bf",
     "LICENSES.txt": "43ba1d33aca43f02dcfe113f839d60f074dcd30f1837488f2eaf4d4d8270d05c"
   }

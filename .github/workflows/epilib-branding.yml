@@ -73,6 +73,7 @@ jobs:
           python3 -m unittest discover -s tools/updates -p 'test_*.py'
           python3 tools/branding/test_integrations.py
           python3 tools/branding/test_menu_icons.py
+          python3 tools/branding/test_profile_package.py
       - name: Authentication and metadata regressions
         env:
           TEST_DATABASE_URL: postgres://epilib_test:disposable-ci-password@localhost:5432/epilib_test
@@ -88,7 +89,7 @@ jobs:
           app/scripts/fetch_xulrunner -p l
           npm run build
           node --test js-build/test/recognition-engine.test.js
-          xvfb-run -a test/runtests.sh -f -b epilibUpdates epilibBranding epilibSyncIsolation apiCredentials localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview metadataMenuIcons preferences_account storageLocal webdav syncLocal syncEngine syncRunner
+          xvfb-run -a test/runtests.sh -f -b epilibUpdates epilibBranding epilibProfileIsolation dataDirectory profile epilibSyncIsolation apiCredentials localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview publicationTitleVariant metadataMenuIcons preferences_account storageLocal webdav syncLocal syncEngine syncRunner
           xvfb-run -a test/runtests.sh -f -b -g 'standalone PDF by ISBN' recognizeDocument
           xvfb-run -a npm run test:desktop --prefix tools/postgresql-sync-server
           app/scripts/dir_build -p l -f

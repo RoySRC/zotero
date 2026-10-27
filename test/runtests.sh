@@ -138,7 +138,7 @@ mkdir -p "$PROFILE"
 makePath ZOTERO_PATH "$ROOT_DIR/build"
 
 # Create data directory
-mkdir "$TEMPDIR/Zotero"
+mkdir "$TEMPDIR/EpiLib"
 
 touch "$PROFILE/prefs.js"
 cat <<EOF >> "$PROFILE/prefs.js"

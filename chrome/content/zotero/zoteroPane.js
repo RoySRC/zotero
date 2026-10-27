@@ -1743,7 +1743,8 @@ var ZoteroPane = new function () {
 		var collectionTreeRows = this.getCollectionTreeRows();
 		if (!collectionTreeRows.length) return;
 		var tagSelector = document.getElementById('zotero-tag-selector-container');
-		return !tagSelector.hasAttribute('collapsed');
+		// A debounced resize can arrive after window shutdown removes the DOM.
+		return !!tagSelector && !tagSelector.hasAttribute('collapsed');
 	};
 
 

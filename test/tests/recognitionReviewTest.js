@@ -1,7 +1,8 @@
-/* global describe, it, afterEach, assert, waitForWindow, window, Zotero, Services */
+/* global describe, it, afterEach, assert, waitForWindow */
 describe('PDF metadata source comparison', function () {
 	let win;
 	const url = 'chrome://zotero/content/recognitionReview.xhtml';
+
 	/** Minimal detached records model a publication and its earlier repository copy. */
 	function fixture() {
 		let item = { itemType: 'conferencePaper', title: 'A paper with a long and descriptive title for metadata comparison',
@@ -19,7 +20,8 @@ describe('PDF metadata source comparison', function () {
 				{ id: 'source-3', label: 'arXiv', item: repository, mergeFields: ['abstractNote', 'creators'] }
 			], custom: { item: { ...item, pages: '1-12', abstractNote: repository.abstractNote, libraryCatalog: 'EpiLib (combined)' },
 				fieldSources: { date: 'source-1', pages: 'source-2', abstractNote: 'source-3' } },
-			providers: [{ name: 'Crossref', status: 'matched' }, { name: 'DataCite', status: 'no_match' },
+			providers: [{ name: 'Crossref', status: 'matched' },
+				{ name: 'DataCite', status: 'no_match' },
 				{ name: 'OpenReview', status: 'unavailable' }] } };
 	}
 
@@ -32,7 +34,9 @@ describe('PDF metadata source comparison', function () {
 		return win.document;
 	}
 
-	afterEach(function () { if (win && !win.closed) win.close(); });
+	afterEach(function () {
+		if (win && !win.closed) win.close();
+	});
 
 	it('shows all sources, full metadata, labels and lookup outcomes with an aligned responsive table', async function () {
 		let doc = await open(fixture());
@@ -43,9 +47,10 @@ describe('PDF metadata source comparison', function () {
 		assert.include(doc.getElementById('recognition-review-fields').textContent, 'A long abstract');
 		assert.include(doc.getElementById('recognition-review-provider-status').textContent, 'Lookup unavailable');
 		assert.equal(doc.getElementById('recognition-review-value-header').textContent, 'Value');
+		const reviewWindow = win;
 		for (let width of [980, 720]) {
 			win.resizeTo(width, 650);
-			await new Promise(resolve => win.requestAnimationFrame(() => win.requestAnimationFrame(resolve)));
+			await new Promise(resolve => reviewWindow.requestAnimationFrame(() => reviewWindow.requestAnimationFrame(resolve)));
 			let main = doc.getElementById('recognition-review-main').getBoundingClientRect();
 			let sidebar = doc.getElementById('recognition-review-sidebar').getBoundingClientRect();
 			assert.isAbove(main.left, sidebar.right);
@@ -82,6 +87,72 @@ describe('PDF metadata source comparison', function () {
 		let doc = await open(io);
 		assert.include(doc.getElementById('recognition-review-provider-status').textContent,
 			'Google Books: API key not configured');
+	});
+
+	it('opens publication upgrades on an eligible source rather than an incompatible Custom preprint', async function () {
+		// Reproduce the title-variant engine contract: Custom intentionally remains
+		// the preprint, while a publication is offered only as a separate raw source.
+		let io = fixture();
+		let preprint = io.review.sources[3].item;
+		io.requiredDOI = null;
+		io.review.custom = { item: preprint, fieldSources: {} };
+		io.review.sources[0].item = preprint;
+		let snapshot = JSON.stringify(io.review);
+		let doc = await open(io);
+		let select = doc.getElementById('recognition-review-sources');
+		let button = doc.getElementById('recognition-review-dialog').getButton('accept');
+		let warning = doc.getElementById('recognition-review-warning');
+		assert.equal(select.value, 'source-1');
+		assert.isFalse(button.disabled);
+		assert.isTrue(warning.hidden);
+		assert.include(doc.getElementById('recognition-review-summary').textContent, 'Conference Paper');
+		assert.isNull(io.out, 'Initial display is not consent to update the library');
+		assert.equal(JSON.stringify(io.review), snapshot, 'Do not rebase or merge Custom onto the publication');
+
+		// Selecting the original version explicitly still enforces the upgrade
+		// restriction; the fix must not merely hide a warning or enable every row.
+		for (let id of ['custom', 'recognized', 'source-3']) {
+			select.value = id; select.dispatchEvent(new win.Event('change'));
+			assert.isTrue(button.disabled);
+			assert.isFalse(warning.hidden);
+			assert.equal(warning.textContent, 'This source is a preprint, not a published record.');
+			assert.isFalse(win.Zotero_Recognition_Review.accept());
+			assert.isNull(io.out);
+		}
+		select.value = 'source-1'; select.dispatchEvent(new win.Event('change'));
+		assert.isTrue(warning.hidden);
+		assert.equal(warning.textContent, '');
+		assert.isFalse(button.disabled);
+		win.close();
+		assert.isNull(io.out, 'Closing a preselected publication still cancels');
+	});
+
+	it('initial source selection obeys both item type and DOI restrictions during ordinary refresh', async function () {
+		let io = fixture();
+		io.review.custom.item.DOI = '10.1234/wrong-version';
+		io.review.sources[0].item = { ...io.review.sources[0].item, DOI: '10.1234/wrong-version' };
+		io.review.sources.unshift({ id: 'wrong-type', label: 'arXiv', mergeFields: [],
+			item: { ...io.review.sources[3].item, DOI: io.requiredDOI } });
+		let doc = await open(io);
+		assert.equal(doc.getElementById('recognition-review-sources').value, 'source-1');
+		assert.isTrue(doc.getElementById('recognition-review-warning').hidden);
+		assert.isNull(io.out);
+	});
+
+	it('keeps an all-ineligible review inspectable but cannot accept any source', async function () {
+		let io = fixture();
+		io.requiredDOI = '10.1234/no-matching-source';
+		let doc = await open(io);
+		let select = doc.getElementById('recognition-review-sources');
+		assert.equal(select.value, 'custom');
+		assert.equal(select.options.length, 5);
+		for (let option of select.options) {
+			select.value = option.value; select.dispatchEvent(new win.Event('change'));
+			assert.isTrue(doc.getElementById('recognition-review-dialog').getButton('accept').disabled);
+			assert.isFalse(doc.getElementById('recognition-review-warning').hidden);
+			assert.isFalse(win.Zotero_Recognition_Review.accept());
+		}
+		assert.isNull(io.out);
 	});
 
 	it('switches sources without losing custom choices or mutating raw records', async function () {

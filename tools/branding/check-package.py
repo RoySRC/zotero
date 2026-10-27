@@ -52,6 +52,29 @@ def check_menu_icons(archive):
         assert any(p.get('d') and p.get('fill') == 'context-fill' for p in paths), f'{action}: missing theme-aware artwork'
 
 
+def check_runtime_identity(resources, config, mac_info=None):
+    """Validate the identities that control profile, library and OS isolation.
+
+    Read the finished files rather than source defaults: a correct source tree
+    can still produce a stale application.ini or config module. Kept separate
+    so regression tests can inject broken packages without copying a full app.
+    Protocol IDs deliberately retain their compatibility values.
+    """
+    ini = configparser.ConfigParser(interpolation=None)
+    ini.read(resources / 'app/application.ini')
+    for key, value in {'Name': config['productName'], 'Vendor': config['productName'],
+                       'ID': config['runtimeIdentity']['GUID']}.items():
+        assert ini['App'][key] == value, f'Runtime identity changed: {key}'
+    with zipfile.ZipFile(resources / 'app/omni.ja') as archive:
+        runtime = archive.read('resource/config.mjs').decode()
+        for key, value in config['runtimeIdentity'].items():
+            assert f"{key}: '{value}'" in runtime, f'Packaged identity changed: {key}'
+    if mac_info is not None:
+        allowed = [config['runtimeIdentity']['BUNDLE_ID'] + suffix
+                   for suffix in ['', '-source', '-dev', '-beta']]
+        assert mac_info['CFBundleIdentifier'] in allowed, 'Shared macOS application identity'
+
+
 def check(bundle):
     root = Path(__file__).resolve().parents[2]
     config = json.loads((root / 'tools/branding/config.json').read_text())
@@ -60,10 +83,10 @@ def check(bundle):
     mac = bundle.suffix == '.app'
     resources = bundle / 'Contents/Resources' if mac else bundle
     app = resources / 'app'
+    info = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes()) if mac else None
+    check_runtime_identity(resources, config, info)
     ini = configparser.ConfigParser(interpolation=None)
     ini.read(app / 'application.ini')
-    for key, value in {'Name': 'Zotero', 'Vendor': 'Zotero', 'ID': 'zotero@zotero.org'}.items():
-        assert ini['App'][key] == value, f'Runtime identity changed: {key}'
     assert ini['AppUpdate']['URL'] == '', 'Native binary update feed must be empty'
     with zipfile.ZipFile(resources / 'omni.ja') as runtime_archive:
         for module, guard in {
@@ -76,6 +99,13 @@ def check(bundle):
     with zipfile.ZipFile(app / 'omni.ja') as archive:
         check_menu_icons(archive)
         text = lambda file: archive.read(file).decode()
+        for locale in (root / 'app/assets/multilocale.txt').read_text().strip().split(','):
+            assert f'-brand-full-name = {name}' in text(f'localization/{locale}/branding/brand.ftl'), locale
+            assert f'localization/{locale}/devtools/client/toolbox.ftl' in archive.namelist(), locale
+        for platform in ['mac', 'win', 'unix']:
+            css = text(f'chrome/content/zotero-platform/{platform}/zotero.css')
+            for icon in set(re.findall(r'chrome://zotero/skin/([^"\x27)\s]*/loading\.svg)', css)):
+                assert f'chrome/skin/default/zotero/{icon}' in archive.namelist(), icon
         runtime = text('resource/config.mjs')
         assert f"CLIENT_NAME: '{name}'" in runtime
         assert "REPOSITORY_URL: 'https://repo.zotero.org/repo/'" in runtime
@@ -88,8 +118,6 @@ def check(bundle):
         assert stamp['channel'] in ('stable', 'development')
         assert stamp['version'] is None if stamp['channel'] == 'development' else re.fullmatch(r'\d+\.\d+\.\d+', stamp['version'])
         assert 'Zotero.Error.prototype.name = "Zotero Error"' in text('chrome/content/zotero/xpcom/error.js')
-        for key, value in config['runtimeIdentity'].items():
-            assert f"{key}: '{value}'" in runtime, f'Packaged identity changed: {key}'
         brand = text('chrome/en-US/locale/branding/brand.properties')
         assert f'brandFullName={name}' in brand
         prefs = text('defaults/preferences/zotero.js')
@@ -106,7 +134,6 @@ def check(bundle):
         image = base64.b64decode(re.search(r'base64,([^"]+)', full).group(1))
         assert image == (root / 'epilib-icons/full-transparent.png').read_bytes()
     if mac:
-        info = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
         assert info['CFBundleDisplayName'] == name
         icon = resources / info['CFBundleIconFile']
         assert hashlib.sha256(icon.read_bytes()).hexdigest() == approved['app/mac/Contents/Resources/epilib.icns']

@@ -12,7 +12,12 @@
 	height: 16px;
 	fill: var(--fill-secondary);
 	@include focus-states using ($color) {
-		@include svgicon("loading", $color, "16");
+		// The dark spinner is already white. The generic icon mixin preloads a
+		// nonexistent white/loading.svg, so use only the two supplied variants.
+		@if $color == "white" {
+			$color: "dark";
+		}
+		background: -make-icon-background("loading", $color, "16", false, false) no-repeat center/contain;
 	}
 	-moz-context-properties: fill, fill-opacity;
 	animation: none;

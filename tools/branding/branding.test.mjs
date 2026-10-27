@@ -42,15 +42,16 @@ test('report submission remains on the existing endpoint pending an EpiLib repor
 	}
 });
 
-test('visible name is independent from on-disk and protocol identities', () => {
+test('EpiLib directories are independent from compatibility protocol identities', () => {
 	assert.equal(ZOTERO_CONFIG.CLIENT_NAME, 'EpiLib');
-	assert.equal(ZOTERO_CONFIG.DATA_DIRECTORY_NAME, 'Zotero');
+	assert.equal(ZOTERO_CONFIG.DATA_DIRECTORY_NAME, 'EpiLib');
+	assert.equal(ZOTERO_CONFIG.BUNDLE_ID, 'org.epilib.epilib');
 	assert.equal(ZOTERO_CONFIG.ID, 'zotero');
 	assert.equal(ZOTERO_CONFIG.GUID, 'zotero@zotero.org');
 	assert.equal(ZOTERO_CONFIG.PREF_BRANCH, 'extensions.zotero.');
 });
 
-test('a rebrand does not relocate an existing default or test data directory', () => {
+test('normal and test data directories use EpiLib, not Zotero', () => {
 	const context = vm.createContext({
 		ZOTERO_CONFIG, Zotero: {},
 		ChromeUtils: { importESModule: () => ({}) },
@@ -59,19 +60,34 @@ test('a rebrand does not relocate an existing default or test data directory', (
 		OS: { Path: path, Constants: { Path: { homeDir: '/home/test', profileDir: '/test/profile' } } }
 	});
 	vm.runInContext(fs.readFileSync(new URL('../../chrome/content/zotero/xpcom/dataDirectory.js', import.meta.url), 'utf8'), context);
-	assert.equal(context.Zotero.DataDirectory.defaultDir, '/home/test/Zotero');
-	assert.equal(context.Zotero.DataDirectory.legacyDirName, 'zotero');
+	assert.equal(context.Zotero.DataDirectory.defaultDir, '/home/test/EpiLib');
+	assert.equal(context.Zotero.DataDirectory.legacyDirName, 'epilib');
 	context.CommandLineOptions.test = true;
-	assert.equal(context.Zotero.DataDirectory.defaultDir, '/test/Zotero');
+	assert.equal(context.Zotero.DataDirectory.defaultDir, '/test/EpiLib');
 });
 
-test('runtime profile identity is preserved but the upstream binary feed is removed', () => {
+test('runtime selects EpiLib profiles without enabling upstream binary updates', () => {
 	const ini = fs.readFileSync(new URL('../../app/assets/application.ini', import.meta.url), 'utf8');
-	assert.match(ini, /^Name=Zotero$/m);
-	assert.match(ini, /^Vendor=Zotero$/m);
+	assert.match(ini, /^Name=EpiLib$/m);
+	assert.match(ini, /^Vendor=EpiLib$/m);
 	assert.match(ini, /^ID=zotero@zotero.org$/m);
 	assert.match(ini, /^URL=$/m);
 	assert.equal(ZOTERO_CONFIG.REPOSITORY_URL, 'https://repo.zotero.org/repo/');
+});
+
+test('macOS launches distinguish EpiLib from official Zotero', () => {
+	const plist = fs.readFileSync(new URL('../../app/mac/Contents/Info.plist', import.meta.url), 'utf8');
+	assert.match(plist, /<key>CFBundleIdentifier<\/key>\s*<string>org\.epilib\.epilib<\/string>/);
+	const build = fs.readFileSync(new URL('../../app/build.sh', import.meta.url), 'utf8');
+	assert.ok(build.includes('org.epilib.epilib-$UPDATE_CHANNEL'));
+});
+
+test('temporary files and shutdown cleanup never share Zotero scratch directories', () => {
+	const source = fs.readFileSync(new URL('../../chrome/content/zotero/xpcom/zotero.js', import.meta.url), 'utf8');
+	const body = source.slice(source.indexOf('this.getTempDirectory = function'), source.indexOf('this.removeTempDirectory ='));
+	assert.ok(body.includes('ZOTERO_CONFIG.BUNDLE_ID'));
+	assert.ok(body.includes('ZOTERO_CONFIG.DATA_DIRECTORY_NAME'));
+	assert.doesNotMatch(body, /relDir = ['"](?:Zotero|zotero|org\.zotero\.zotero)['"]/);
 });
 
 test('error dispatch keeps its compatibility name across the display-name change', () => {
