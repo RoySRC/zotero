@@ -23,9 +23,17 @@ test('publication is isolated, pinned, non-forcing and limited to rebranding', (
 		for (const action of text.matchAll(/uses: ([^\s]+)/g)) {
 			assert.match(action[1], /@[a-f0-9]{40}$/, 'Pin Actions to reviewed commits');
 		}
-		assert.ok(text.includes('test/runtests.sh -f -b epilibBranding epilibSyncIsolation recognitionEngine preferences_account storageLocal webdav syncLocal syncEngine syncRunner'));
+		const suites = text.match(/test\/runtests\.sh -f -b ([^\n]+)/)[1].split(' ');
+		for (const required of ['epilibUpdates', 'epilibBranding', 'epilibSyncIsolation', 'recognitionEngine', 'metadataMenuIcons',
+			'preferences_account', 'storageLocal', 'webdav', 'syncLocal', 'syncEngine', 'syncRunner']) {
+			assert.ok(suites.includes(required), `Missing required suite: ${required}`);
+		}
 		assert.ok(text.includes("-g 'standalone PDF by ISBN' recognizeDocument"));
+		assert.ok(text.includes('python3 tools/branding/test_menu_icons.py'),
+			'Require regression coverage for both metadata commands and their packaged icons');
 		assert.ok(text.includes('TEST_DATABASE_URL:'));
+		assert.ok(text.includes('xvfb-run -a npm run test:desktop --prefix tools/postgresql-sync-server'),
+			'Require the real desktop/PostgreSQL publication-update round trip before publishing');
 	}
 });
 

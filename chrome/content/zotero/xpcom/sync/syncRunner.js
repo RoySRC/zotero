@@ -155,6 +155,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 		try {
 			await Zotero.Notifier.trigger('start', 'sync', []);
 			
+			const credentialContext = Zotero.Sync.Metadata.getCredentialContext();
 			let apiKey = await _getAPIKey();
 			if (!apiKey) {
 				throw new Zotero.Error("API key not set", Zotero.Error.ERROR_API_KEY_NOT_SET);
@@ -195,6 +196,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 			
 			this.setSyncStatus(Zotero.getString('sync.status.preparing'));
 			
+			Zotero.Sync.Metadata.assertCredentialContext(credentialContext);
 			let client = this.getAPIClient({ apiKey });
 			let keyInfo = await this.checkAccess(client, options);
 
@@ -1216,7 +1218,7 @@ Zotero.Sync.Runner_Module = function (options = {}) {
 			switch (e.error) {
 				case Zotero.Error.ERROR_API_KEY_NOT_SET:
 				case Zotero.Error.ERROR_API_KEY_INVALID:
-					e.message = Zotero.ftl.formatValueSync('account-not-logged-in-text');
+					e.message = Zotero.ftl.formatValueSync('account-epilib-not-logged-in-text');
 					e.dialogButtonText = Zotero.ftl.formatValueSync('account-log-in');
 					e.dialogButtonCallback = function () {
 						Zotero.Utilities.Internal.openPreferences(

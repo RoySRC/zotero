@@ -2297,6 +2297,11 @@ Function ${UN}IterateUninstallKeys
   EnumRegKey $R7 SHCTX $R6 $1
   StrCmp $R7 "" end +1
   IntOp $1 $1 + 1 ; Increment the counter
+  ; InstallLocation alone is not product ownership. Restrict cleanup to our
+  ; uninstall-key prefix even if another product registered the same path.
+  StrLen $R5 "${BrandFullNameInternal} "
+  StrCpy $R9 $R7 $R5
+  StrCmp $R9 "${BrandFullNameInternal} " +1 loop
   ClearErrors
   ReadRegStr $R5 SHCTX "$R6\$R7" "InstallLocation"
   IfErrors loop
@@ -2631,8 +2636,12 @@ FunctionEnd
       Push $R7
 
       ReadRegStr $R7 HKCU "Software\Classes\$R9" ""
-      StrCmp "$R7" "$R8" +1 +2
-      DeleteRegKey HKCU "Software\Classes\$R9"
+      ${If} "$R7" == "$R8"
+        ; Other applications may have OpenWith entries under this extension.
+        ; Remove only our default value, never the entire shared extension key.
+        DeleteRegValue HKCU "Software\Classes\$R9" ""
+        DeleteRegKey /ifempty HKCU "Software\Classes\$R9"
+      ${EndIf}
 
       ReadRegStr $R7 HKLM "Software\Classes\$R9" ""
       StrCmp "$R7" "$R8" +1 +2
@@ -4303,12 +4312,12 @@ FunctionEnd
 
 !ifndef NO_INSTDIR_FROM_REG
       SetShellVarContext all      ; Set SHCTX to HKLM
-      ${GetSingleInstallPath} "Software\Zotero\${BrandFullNameInternal}" $R9
+      ${GetSingleInstallPath} "${InstallerRegistryKey}\${BrandFullNameInternal}" $R9
 
       StrCmp "$R9" "false" +1 finish_get_install_dir
 
       SetShellVarContext current  ; Set SHCTX to HKCU
-      ${GetSingleInstallPath} "Software\Zotero\${BrandFullNameInternal}" $R9
+      ${GetSingleInstallPath} "${InstallerRegistryKey}\${BrandFullNameInternal}" $R9
 
       finish_get_install_dir:
       StrCmp "$R9" "false" +2 +1

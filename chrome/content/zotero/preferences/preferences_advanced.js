@@ -331,7 +331,7 @@ Zotero_Preferences.Advanced = {
 		await Zotero.DataDirectory.choose(
 			true,
 			!isCustomSelection,
-			() => Zotero.launchURL('https://www.zotero.org/support/zotero_data')
+			() => Zotero.launchURL(ZOTERO_CONFIG.SUPPORT_URL)
 		);
 	},
 	

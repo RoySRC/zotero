@@ -18,7 +18,7 @@ license and third-party attribution notices remain in place.
 
 ## Deliberately Retained
 
-URLs (including update URLs), email addresses, HTTP headers, OAuth configuration,
+Service URLs (except the intentionally replaced desktop binary update feed), email addresses, HTTP headers, OAuth configuration,
 bundle IDs, extension IDs, signing identities, URL schemes, command names,
 JavaScript namespaces, resource keys, WebDAV paths, filenames, database names,
 login-manager realms, preference keys and existing profile/data directory paths
@@ -35,8 +35,45 @@ The macOS build creates `app/staging/EpiLib.app` and a `Zotero.app` symlink in t
 same staging directory for existing development launchers. The executable remains
 `Contents/MacOS/zotero`. Renaming does not isolate an installation's profile;
 continue using the custom launcher or explicit `-profile` and `-datadir` options.
-Automatic application updates default to off: the retained upstream update URL
-is not an EpiLib release feed. Existing user preferences are not overwritten.
+Native Zotero binary updates are disabled in assembled runtimes and their updater
+executables are omitted. EpiLib release notifications use GitHub Releases; see
+`tools/updates/README.md`. Translator/style repository updates and existing user
+preferences remain independent.
+
+## Product Links and Windows Isolation
+
+Public onboarding, help, feedback and new-feature links now use `https://epilib.org/`.
+Architecture warnings and connector downloads use `https://epilib.org/downloads`.
+These are intentional product-navigation changes, not a rewrite of service APIs.
+The home page is a placeholder until dedicated documentation/forum routes exist.
+Explicit upstream credits, licensing and the upstream changelog remain upstream.
+Error/debug report submission is deferred and still uses the Zotero report service.
+
+Windows installers use `Software\EpiLib`, EpiLib uninstall entries/ProgIDs and an
+`EpiLib.exe` App Paths alias pointing to the retained `zotero.exe` executable.
+`epilib-install.ini` marks EpiLib packages independently of Mozilla's app ID.
+Setup accepts an empty directory or a marked EpiLib installation, never an
+unmarked official installation. Older unmarked custom builds require a separate
+install directory; no installer attempts to adopt or uninstall them automatically.
+The uninstaller preserves all profiles, credentials, shared update caches and
+unlogged files. Existing file/protocol defaults belonging to other apps are not
+overwritten. The compatible `zotero://` scheme is registered only if unclaimed
+or already owned by that installation. Opening old links still uses the current
+OS-selected handler; users can choose the app through Windows default-app settings.
+
+This isolates **installation and removal**, not runtime profile selection or the
+shared connector port. Runtime Name/Vendor, existing profile/data paths and
+document identifiers remain unchanged. Continue using an explicit custom profile
+and data-directory launcher when running both applications side by side.
+
+Run `node --test tools/branding/windows-installer.test.mjs` on any host. On
+Windows, `tools/branding/test-windows-isolation.ps1` compiles the production NSIS
+ownership guards and executes them against missing/empty, official, wrong-marker,
+EpiLib, profile and library fixtures. It never touches real installed apps or the
+registry. This test also runs as the Windows job in the branding/release gate.
+Full interactive installer/upgrade/uninstaller behavior still needs a Windows VM
+smoke test before distributing an installer; archive packaging alone does not
+exercise Windows registration or UAC.
 
 ## Verification
 
@@ -77,7 +114,7 @@ the sibling source repositories. They are not application runtime dependencies.
 ## Automated Upstream Integration
 
 `.github/workflows/epilib-upstream.yml` integrates **zotero/zotero main** into
-**RoySRC/zotero rebranding** every Monday at 09:17 UTC. It also supports a manual
+**epilib-org/epilib-desktop rebranding** every Monday at 09:17 UTC. It also supports a manual
 run, with **dry run enabled by default**. This is desktop/server automation;
 mobile and connector repositories still use the workspace migration tools and
 need their own platform CI before release. It does not update a release branch.
@@ -161,6 +198,26 @@ node --test tools/branding/*.test.mjs
 python3 tools/branding/test_integrations.py
 python3 tools/branding/check-package.py app/staging/EpiLib.app
 ```
+
+Both metadata menu actions have independent visual regression coverage:
+
+```sh
+python3 tools/branding/test_menu_icons.py
+test/runtests.sh -f -b metadataMenuIcons recognitionEngine recognitionReview
+```
+
+The Python suite compiles the real macOS, Windows, and Linux Sass and checks an
+in-memory package. It deliberately removes each action's icon mapping, native
+or in-content CSS property, iconic menu class, and SVG asset, and also rejects
+blank, oversized, or hardcoded-color artwork. These mutations never alter source
+files. The release package checker applies the same checks to the finished app.
+
+The six native integration cases open the actual item popup in light and dark
+themes, verify resolved styles against a neighboring command, and decode the
+shipped 16-pixel SVGs. They cover both Refresh Metadata and Update to Published
+Version on preprints, plus Refresh Metadata on DOI-less published items. These
+tests use the runner's disposable profile, not the user's library. Both branding
+and upstream-integration workflows require these suites.
 
 `apply.mjs` without `--check` writes the reviewed overlay. `--base <commit>` may
 restore approved artwork from that target commit. Neither command merges or

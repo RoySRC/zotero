@@ -45,6 +45,7 @@ RequestExecutionLevel user
 ; The following includes are custom.
 !include branding.nsi
 !include defines.nsi
+!include isolation.nsh
 !include common.nsh
 !include locales.nsi
 
@@ -77,7 +78,6 @@ VIAddVersionKey "OriginalFilename" "helper.exe"
 !insertmacro un.DeleteShortcuts
 !insertmacro un.ElevateUAC
 !insertmacro un.GetSecondInstallPath
-!insertmacro un.ManualCloseAppPrompt
 !insertmacro un.ParseUninstallLog
 !insertmacro un.RegCleanAppHandler
 !insertmacro un.RegCleanFileHandler
@@ -162,21 +162,15 @@ SectionEnd
 # Uninstall Sections
 
 Section "Uninstall"
+  !insertmacro EpiLibRequireOwnedInstall
   SetDetailsPrint textonly
   DetailPrint $(STATUS_UNINSTALL_MAIN)
   SetDetailsPrint none
 
-  ; Handle a few uninstall tasks for the current user even if this ends up being
-  ; a system-wide uninstall.
-  ${MUI_INSTALLOPTIONS_READ} $0 "unconfirm.ini" "Field 3" "State"
-  ${If} "$0" == "1"
-    SetShellVarContext current
-    Push "Zotero\Zotero"
-    Call un.DeleteRelativeProfiles
-    RmDir "$APPDATA\Zotero"
-  ${EndIf}
+  ; Retain all profiles, credentials and library data. Runtime profiles may
+  ; still be shared with older builds or the official application.
 
-  ; Check whether Zotero was installed under HKLM. If it was we will need to elevate.
+  ; Check whether EpiLib was installed under HKLM. If it was we will need to elevate.
   SetShellVarContext all
   Push "0"
   Push $INSTDIR
@@ -205,45 +199,43 @@ Section "Uninstall"
     ClearErrors
   ${EndIf}
 
-  ; Unregister resources associated with Win7 taskbar jump lists.
-  ApplicationID::UninstallJumpLists "${AppUserModelID}"
+  ; The retained runtime identity can share a taskbar group with older clients.
+  ; Do not delete that group's jump lists when removing this installation.
 
   ClearErrors
-  ${un.RegCleanMain} "Software\Zotero"
+  ${un.RegCleanMain} "${InstallerRegistryKey}"
   ${un.RegCleanUninstall}
   ${un.DeleteShortcuts}
   ${un.SetAppLSPCategories}
   
   ${un.RegCleanProtocolHandler} "zotero"
-  ${un.RegCleanAppHandler} "ZoteroRIS"
-  ${un.RegCleanAppHandler} "ZoteroISI"
-  ${un.RegCleanAppHandler} "ZoteroMODS"
-  ${un.RegCleanAppHandler} "ZoteroRDF"
-  ${un.RegCleanAppHandler} "ZoteroBibTeX"
-  ${un.RegCleanAppHandler} "ZoteroMARC"
-  ${un.RegCleanAppHandler} "ZoteroCSL"
+  ${un.RegCleanAppHandler} "EpiLibRIS"
+  ${un.RegCleanAppHandler} "EpiLibISI"
+  ${un.RegCleanAppHandler} "EpiLibMODS"
+  ${un.RegCleanAppHandler} "EpiLibRDF"
+  ${un.RegCleanAppHandler} "EpiLibBibTeX"
+  ${un.RegCleanAppHandler} "EpiLibMARC"
+  ${un.RegCleanAppHandler} "EpiLibCSL"
 
   ClearErrors
-  ReadRegStr $R9 HKCR "ZoteroRDF" ""
-  ; Don't clean up the file handlers if the ZoteroRDF key still exists since
+  ReadRegStr $R9 HKCR "EpiLibRDF" ""
+  ; Don't clean up the file handlers if the EpiLibRDF key still exists since
   ; there should be a second installation that may be the default file handler
   ${If} ${Errors}
-    ${un.RegCleanFileHandler}  ".rdf"    "ZoteroRDF"
-    ${un.RegCleanFileHandler}  ".ris"    "ZoteroRIS"
-    ${un.RegCleanFileHandler}  ".isi"    "ZoteroISI"
-    ${un.RegCleanFileHandler}  ".mods"   "ZoteroMODS"
-    ${un.RegCleanFileHandler}  ".bib"    "ZoteroBibTeX"
-    ${un.RegCleanFileHandler}  ".bibtex" "ZoteroBibTeX"
-    ${un.RegCleanFileHandler}  ".marc"   "ZoteroMARC"
-    ${un.RegCleanFileHandler}  ".csl"    "ZoteroCSL"
+    ${un.RegCleanFileHandler}  ".rdf"    "EpiLibRDF"
+    ${un.RegCleanFileHandler}  ".ris"    "EpiLibRIS"
+    ${un.RegCleanFileHandler}  ".isi"    "EpiLibISI"
+    ${un.RegCleanFileHandler}  ".mods"   "EpiLibMODS"
+    ${un.RegCleanFileHandler}  ".bib"    "EpiLibBibTeX"
+    ${un.RegCleanFileHandler}  ".bibtex" "EpiLibBibTeX"
+    ${un.RegCleanFileHandler}  ".marc"   "EpiLibMARC"
+    ${un.RegCleanFileHandler}  ".csl"    "EpiLibCSL"
   ${EndIf}
 
-  ${un.GetSecondInstallPath} "Software\Zotero" $R9
+  ${un.GetSecondInstallPath} "${InstallerRegistryKey}" $R9
 
-  StrCpy $0 "Software\Microsoft\Windows\CurrentVersion\App Paths\${FileMainEXE}"
+  StrCpy $0 "Software\Microsoft\Windows\CurrentVersion\App Paths\${AppPathAlias}"
   ${If} $R9 == "false"
-    DeleteRegKey SHCTX "$0"
-    StrCpy $0 "Software\Classes\MIME\Database\Content Type\application/x-xpinstall;app=firefox"
     DeleteRegKey SHCTX "$0"
   ${Else}
     ReadRegStr $R1 SHCTX "$0" ""
@@ -273,55 +265,14 @@ Section "Uninstall"
     Delete /REBOOTOK "$INSTDIR\removed-files"
   ${EndIf}
 
-  ; Remove the updates directory for Vista and above
-  ${un.CleanUpdatesDir} "Zotero\Zotero"
+  ; Do not remove shared runtime update/profile caches.
 
   ; Parse the uninstall log to unregister dll's and remove all installed
   ; files / directories this install is responsible for.
   ${un.ParseUninstallLog}
 
-  ; Files that were added by an in-app update aren't currently being added to the uninstall log,
-  ; so manually delete everything we know about as long as the directory name begins with "Zotero".
-  ; We don't just delete the directory because we don't know for sure that the user didn't do
-  ; something crazy like put their data directory in it.
-  ${GetFileName} $INSTDIR $R1
-  StrCpy $R2 $R1 6
-  StrCmp $R2 "Zotero" +1 post_delete
-  ${If} ${FileExists} "$INSTDIR\chrome"
-    RMDir /r /REBOOTOK "$INSTDIR\chrome"
-  ${EndIF}
-  ${If} ${FileExists} "$INSTDIR\components"
-    RMDir /r /REBOOTOK "$INSTDIR\components"
-  ${EndIF}
-  ${If} ${FileExists} "$INSTDIR\defaults"
-    RMDir /r /REBOOTOK "$INSTDIR\defaults"
-  ${EndIF}
-  ${If} ${FileExists} "$INSTDIR\dictionaries"
-    RMDir /r /REBOOTOK "$INSTDIR\dictionaries"
-  ${EndIF}
-  ${If} ${FileExists} "$INSTDIR\extensions"
-    RMDir /r /REBOOTOK "$INSTDIR\extensions"
-  ${EndIF}
-  ${If} ${FileExists} "$INSTDIR\fonts"
-    RMDir /r /REBOOTOK "$INSTDIR\fonts"
-  ${EndIF}
-  ${If} ${FileExists} "$INSTDIR\gmp-clearkey"
-    RMDir /r /REBOOTOK "$INSTDIR\gmp-clearkey"
-  ${EndIF}
-  ${If} ${FileExists} "$INSTDIR\xulrunner"
-    RMDir /r /REBOOTOK "$INSTDIR\xulrunner"
-  ${EndIF}
-  Delete /REBOOTOK "$INSTDIR\*.chk"
-  Delete /REBOOTOK "$INSTDIR\*.dll"
-  Delete /REBOOTOK "$INSTDIR\*.exe"
-  Delete /REBOOTOK "$INSTDIR\Accessible.tlb"
-  Delete /REBOOTOK "$INSTDIR\dependentlibs.list"
-  Delete /REBOOTOK "$INSTDIR\firefox.VisualElementsManifest.xml"
-  Delete /REBOOTOK "$INSTDIR\omni.ja"
-  Delete /REBOOTOK "$INSTDIR\platform.ini"
-  Delete /REBOOTOK "$INSTDIR\precomplete"
-  Delete /REBOOTOK "$INSTDIR\voucher.bin"
-  post_delete:
+  ; Remove only files recorded by this installer, not arbitrary files by
+  ; extension or by a Zotero/EpiLib directory-name prefix.
   
   ; Remove the uninstall directory that we control
   RmDir /r /REBOOTOK "$INSTDIR\uninstall"
@@ -387,8 +338,7 @@ Function un.leaveWelcome
   ${If} ${FileExists} "$INSTDIR\${FileMainEXE}"
     Banner::show /NOUNLOAD "$(BANNER_CHECK_EXISTING)"
 
-    ; If the message window has been found previously give the app an additional
-    ; five seconds to close.
+    ; On a retry, give this installation's locked files five seconds to close.
     ${If} "$TmpVal" == "FoundMessageWindow"
       Sleep 5000
     ${EndIf}
@@ -401,13 +351,9 @@ Function un.leaveWelcome
 
     ; If there are files in use $TmpVal will be "true"
     ${If} "$TmpVal" == "true"
-      ; If the message window is found the call to ManualCloseAppPrompt will
-      ; abort leaving the value of $TmpVal set to "FoundMessageWindow".
+      ; Keep the existing retry flag, but never search by shared window class.
       StrCpy $TmpVal "FoundMessageWindow"
-      ${un.ManualCloseAppPrompt} "${WindowClass}" "$(WARN_MANUALLY_CLOSE_APP_UNINSTALL)"
-      ; If the message window is not found set $TmpVal to "true" so the restart
-      ; required message is displayed.
-      StrCpy $TmpVal "true"
+      !insertmacro EpiLibFilesInUse "$(WARN_MANUALLY_CLOSE_APP_UNINSTALL)"
     ${EndIf}
   ${EndIf}
 FunctionEnd
@@ -421,7 +367,7 @@ Function un.preConfirm
   ${EndIf}
 
   ; Setup the unconfirm.ini file for the Custom Uninstall Confirm Page
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Settings" NumFields "5"
+  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Settings" NumFields "3"
 
   WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 1" Type   "label"
   WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 1" Text   "$(UN_CONFIRM_UNINSTALLED_FROM)"
@@ -441,54 +387,19 @@ Function un.preConfirm
   WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 2" Bottom "30"
   WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 2" flags  "READONLY"
 
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Type   "checkbox"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Text   "$(UN_REMOVE_PROFILES)"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Left   "0"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Right  "-1"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Top    "40"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Bottom "50"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" State  "0"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" flags  "NOTIFY"
-
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 4" Type   "text"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 4" State   "$(UN_REMOVE_PROFILES_DESC)"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 4" Left   "0"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 4" Right  "-1"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 4" Top    "52"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 4" Bottom "120"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 4" flags  "MULTILINE|READONLY"
-
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 5" Type   "label"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 5" Text   "$(UN_CONFIRM_CLICK)"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 5" Left   "0"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 5" Right  "-1"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 5" Top    "130"
-  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 5" Bottom "150"
-
-  ${If} "$TmpVal" == "true"
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 6" Type   "label"
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 6" Text   "$(SUMMARY_REBOOT_REQUIRED_UNINSTALL)"
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 6" Left   "0"
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 6" Right  "-1"
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 6" Top    "35"
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 6" Bottom "45"
-
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Settings" NumFields "6"
-
-    ; To insert this control reset Top / Bottom for controls below this one
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Top    "55"
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Bottom "65"
-    WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 4" Top    "67"
-  ${EndIf}
+  ; No profile-removal checkbox: retained runtime identities can share data.
+  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Type "label"
+  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Text "Settings, credentials and library data will be retained."
+  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Left "0"
+  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Right "-1"
+  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Top "40"
+  WriteINIStr "$PLUGINSDIR\unconfirm.ini" "Field 3" Bottom "70"
 
   !insertmacro MUI_HEADER_TEXT "$(UN_CONFIRM_PAGE_TITLE)" "$(UN_CONFIRM_PAGE_SUBTITLE)"
   ; The Summary custom page has a textbox that will automatically receive
   ; focus. This sets the focus to the Install button instead.
   !insertmacro MUI_INSTALLOPTIONS_INITDIALOG "unconfirm.ini"
   GetDlgItem $0 $HWNDPARENT 1
-  ${MUI_INSTALLOPTIONS_READ} $1 "unconfirm.ini" "Field 4" "HWND"
-  SetCtlColors $1 0x000000 0xFFFFEE
-  ShowWindow $1 ${SW_HIDE}
   System::Call "user32::SetFocus(i r0, i 0x0007, i,i)i"
   ${MUI_INSTALLOPTIONS_READ} $1 "unconfirm.ini" "Field 2" "HWND"
   SendMessage $1 ${WM_SETTEXT} 0 "STR:$INSTDIR"
@@ -496,28 +407,12 @@ Function un.preConfirm
 FunctionEnd
 
 Function un.leaveConfirm
-  ${MUI_INSTALLOPTIONS_READ} $0 "unconfirm.ini" "Settings" "State"
-  StrCmp $0 "3" +1 continue
-  ${MUI_INSTALLOPTIONS_READ} $0 "unconfirm.ini" "Field 3" "State"
-  ${MUI_INSTALLOPTIONS_READ} $1 "unconfirm.ini" "Field 4" "HWND"
-  StrCmp $0 1 +1 +3
-  ShowWindow $1 ${SW_SHOW}
-  Abort
-
-  ShowWindow $1 ${SW_HIDE}
-  Abort
-
-  continue:
-
-  ; Try to delete the app executable and if we can't delete it try to find the
-  ; app's message window and prompt the user to close the app. This allows
-  ; running an instance that is located in another directory. If for whatever
-  ; reason there is no message window we will just rename the app's files and
-  ; then remove them on restart if they are in use.
+  ; Recheck only this installation's executable before proceeding. Do not
+  ; search for or close another client with the same process/window name.
   ClearErrors
   ${DeleteFile} "$INSTDIR\${FileMainEXE}"
   ${If} ${Errors}
-    ${un.ManualCloseAppPrompt} "${WindowClass}" "$(WARN_MANUALLY_CLOSE_APP_UNINSTALL)"
+    !insertmacro EpiLibFilesInUse "$(WARN_MANUALLY_CLOSE_APP_UNINSTALL)"
   ${EndIf}
 FunctionEnd
 
@@ -572,6 +467,7 @@ Function .onInit
   Push $INSTDIR
   Call GetLongPath
   Pop $INSTDIR
+  !insertmacro EpiLibRequireOwnedInstall
   IfFileExists "$INSTDIR\${FileMainEXE}" +2 +1
   Quit ; Nothing initialized so no need to call OnEndCommon
 
@@ -693,6 +589,7 @@ Function un.onInit
   Push $INSTDIR
   Call un.GetLongPath
   Pop $INSTDIR
+  !insertmacro EpiLibRequireOwnedInstall
   ${Unless} ${FileExists} "$INSTDIR\${FileMainEXE}"
   Abort
   ${EndUnless}
@@ -719,61 +616,4 @@ FunctionEnd
 
 Function un.onGUIEnd
   ${un.OnEndCommon}
-FunctionEnd
-
-; Deletes all relative profiles specified in an application's profiles.ini and
-; performs various other cleanup.
-
-; The SetShellVarContext setting should be set to current before calling this
-; function.
-
-; @0  =   _REL_PROFILE_PATH
-;         The relative path to the profile directory.
-
-; $R6 = value of IsRelative read from profiles.ini
-; $R7 = value of Path to profile read from profiles.ini
-; $R8 = counter for reading profiles (e.g. Profile0, Profile1, etc.)
-; $R9 = _REL_PROFILE_PATH
-
-Function un.DeleteRelativeProfiles
-  Exch $R9
-  Push $R8
-  Push $R7
-  Push $R6
-
-  StrCpy $R8 -1
-
-  loop:
-  IntOp $R8 $R8 + 1  ; Increment the counter.
-  ReadINIStr $R7 "$APPDATA\$R9\profiles.ini" "Profile$R8" "Path"
-  IfErrors end +1
-
-  ; Only remove relative profiles
-  ReadINIStr $R6 "$APPDATA\$R9\profiles.ini" "Profile$R8" "IsRelative"
-  StrCmp "$R6" "1" +1 loop
-
-  ; Relative paths in profiles.ini use / as a separator
-  ${un.WordReplace} "$R7" "/" "\" "+" $R7
-
-  IfFileExists "$LOCALAPPDATA\$R9\$R7" +1 +2
-  RmDir /r "$LOCALAPPDATA\$R9\$R7"
-  IfFileExists "$APPDATA\$R9\$R7" +1 +2
-  RmDir /r "$APPDATA\$R9\$R7"
-  GoTo loop
-
-  end:
-  ; Remove profiles directory under LOCALAPPDATA (e.g. cache, etc.) since
-  ; they are at times abandoned.
-  RmDir /r "$LOCALAPPDATA\$R9\Profiles"
-  RmDir /r "$APPDATA\$R9\Crash Reports"
-  Delete "$APPDATA\$R9\profiles.ini"
-  Delete "$APPDATA\$R9\console.log"
-  Delete "$APPDATA\$R9\pluginreg.dat"
-  RmDir "$APPDATA\$R9\Profiles"
-  RmDir "$APPDATA\$R9"
-
-  Pop $R6
-  Pop $R7
-  Pop $R8
-  Pop $R9
 FunctionEnd

@@ -229,6 +229,58 @@ test('bulk sync object updates', {
 		assert.equal(item.itemType, 'book');
 		assert.equal(item.title, 'Renamed book');
 	});
+	await t.test('published-version POST patches preserve unchanged title and collection membership', async () => {
+		// Recognition leaves the title and membership unchanged, so the desktop's
+		// patch contains itemType but omits those fields. It is not a replacement.
+		const original = await save('items', {
+			key: 'NRYGVRVP', itemType: 'preprint',
+			title: 'Neuro-Symbolic AI for Analytical Solutions of Differential Equations',
+			abstractNote: 'Original abstract', citationKey: 'Oikonomou2025NeuroSymbolic',
+			DOI: '10.48550/arXiv.2502.01476', archiveID: '2502.01476',
+			collections: ['COLLECT1'], tags: [{ tag: 'Keep this tag' }],
+			relations: { 'dc:relation': 'https://example.org/related' },
+			dateAdded: '2026-10-26T23:06:03Z'
+		});
+		const child = await save('items', { key: 'PAPERPDF', itemType: 'attachment',
+			parentItem: original.key, title: 'Full Text PDF',
+			linkMode: 'imported_file', filename: 'paper.pdf' });
+		const annotation = await save('items', { key: 'PAPERANN', itemType: 'annotation',
+			parentItem: child.key, annotationType: 'highlight', annotationText: 'Keep this highlight' });
+		const updated = await save('items', {
+			key: original.key, version: original.version, itemType: 'conferencePaper',
+			date: '2026', proceedingsTitle: 'ICML 2026 regular',
+			DOI: '', archiveID: '', extra: 'arXiv: 2502.01476',
+			creators: [{ creatorType: 'author', name: 'Orestis Oikonomou' }]
+		});
+		for (const field of ['title', 'abstractNote', 'citationKey', 'collections', 'tags', 'relations', 'dateAdded']) {
+			assert.deepEqual(updated[field], original[field], `Preserve unchanged ${field}`);
+		}
+		assert.equal(updated.itemType, 'conferencePaper');
+		assert.equal(updated.DOI, undefined, 'Type-change field clears produce sparse response data');
+		assert.equal(updated.archiveID, undefined, 'An obsolete field must not reach the strict desktop importer');
+		assert.equal(updated.proceedingsTitle, 'ICML 2026 regular');
+		assert.deepEqual(await read('items', child.key), child);
+		assert.deepEqual(await read('items', annotation.key), annotation);
+		const stale = await write('items', { key: original.key, version: original.version,
+			itemType: 'preprint', title: 'Stale title' });
+		assert.equal(stale.failed[0].code, 412);
+		assert.deepEqual(await read('items', original.key), updated);
+	});
+	await t.test('typed and empty POST updates preserve omitted fields but honor explicit empty values', async () => {
+		let item = await save('items', { key: 'TYPEPOST', itemType: 'book', title: 'Keep title',
+			collections: ['COLLECT1'], tags: [{ tag: 'Keep tag' }] });
+		item = await save('items', { key: item.key, version: item.version, itemType: 'book', publisher: 'Publisher' });
+		assert.equal(item.title, 'Keep title');
+		assert.deepEqual(item.collections, ['COLLECT1']);
+		item = await save('items', { key: item.key, version: item.version });
+		assert.equal(item.title, 'Keep title');
+		item = await save('items', { key: item.key, version: item.version, itemType: 'book',
+			title: '', collections: [], tags: [] });
+		assert.equal(item.title, '');
+		assert.deepEqual(item.collections, []);
+		assert.deepEqual(item.tags, []);
+		assert.equal(item.publisher, 'Publisher');
+	});
 	await t.test('recognition parenting removes inherited child collections but preserves parent membership', async () => {
 		let parent = await save('items', { key: 'PAPER001', itemType: 'preprint', title: 'Paper', collections: ['COLLECT1'] });
 		let child = await save('items', { key: 'PDF00001', itemType: 'attachment', title: 'PDF',

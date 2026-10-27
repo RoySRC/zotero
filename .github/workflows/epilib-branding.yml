@@ -4,12 +4,30 @@ on:
   push:
     branches: [rebranding]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
 permissions:
   contents: read
 concurrency:
   group: epilib-branding-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  windows-installer-isolation:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Install NSIS test compiler
+        run: choco install nsis --yes --no-progress
+      - name: Execute production ownership guards on disposable fixtures
+        shell: pwsh
+        run: ./tools/branding/test-windows-isolation.ps1
   branding:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -28,6 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
           submodules: recursive
           lfs: true
@@ -50,7 +69,10 @@ jobs:
             node tools/branding/check-upstream.mjs --base "$BASE"
           fi
           node --test tools/branding/*.test.mjs
+          node --test tools/updates/*.test.mjs
+          python3 -m unittest discover -s tools/updates -p 'test_*.py'
           python3 tools/branding/test_integrations.py
+          python3 tools/branding/test_menu_icons.py
       - name: Authentication and metadata regressions
         env:
           TEST_DATABASE_URL: postgres://epilib_test:disposable-ci-password@localhost:5432/epilib_test
@@ -61,11 +83,13 @@ jobs:
       - name: Build, UI smoke and packaged branding
         env:
           NODE_OPTIONS: --openssl-legacy-provider
+          TEST_DATABASE_URL: postgres://epilib_test:disposable-ci-password@localhost:5432/epilib_test
         run: |
           app/scripts/fetch_xulrunner -p l
           npm run build
           node --test js-build/test/recognition-engine.test.js
-          xvfb-run -a test/runtests.sh -f -b epilibBranding epilibSyncIsolation localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview preferences_account storageLocal webdav syncLocal syncEngine syncRunner
+          xvfb-run -a test/runtests.sh -f -b epilibUpdates epilibBranding epilibSyncIsolation apiCredentials localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview metadataMenuIcons preferences_account storageLocal webdav syncLocal syncEngine syncRunner
           xvfb-run -a test/runtests.sh -f -b -g 'standalone PDF by ISBN' recognizeDocument
+          xvfb-run -a npm run test:desktop --prefix tools/postgresql-sync-server
           app/scripts/dir_build -p l -f
           python3 tools/branding/check-package.py app/staging/Zotero_linux-x86_64

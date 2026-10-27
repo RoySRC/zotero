@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   integrate:
-    if: github.repository == 'RoySRC/zotero'
+    if: github.repository == 'epilib-org/epilib-desktop'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
@@ -75,7 +75,10 @@ jobs:
           node tools/branding/check-upstream.mjs --base "$BASE"
           git diff --check
           node --test tools/branding/*.test.mjs
+          node --test tools/updates/*.test.mjs
+          python3 -m unittest discover -s tools/updates -p 'test_*.py'
           python3 tools/branding/test_integrations.py
+          python3 tools/branding/test_menu_icons.py
       - name: Commit candidate for validation
         if: steps.merge.outputs.changed == 'true'
         id: candidate
@@ -100,12 +103,14 @@ jobs:
         if: steps.merge.outputs.changed == 'true'
         env:
           NODE_OPTIONS: --openssl-legacy-provider
+          TEST_DATABASE_URL: postgres://epilib_test:disposable-ci-password@localhost:5432/epilib_test
         run: |
           app/scripts/fetch_xulrunner -p l
           npm run build
           node --test js-build/test/recognition-engine.test.js
-          xvfb-run -a test/runtests.sh -f -b epilibBranding epilibSyncIsolation localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview preferences_account storageLocal webdav syncLocal syncEngine syncRunner
+          xvfb-run -a test/runtests.sh -f -b epilibUpdates epilibBranding epilibSyncIsolation apiCredentials localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview metadataMenuIcons preferences_account storageLocal webdav syncLocal syncEngine syncRunner
           xvfb-run -a test/runtests.sh -f -b -g 'standalone PDF by ISBN' recognizeDocument
+          xvfb-run -a npm run test:desktop --prefix tools/postgresql-sync-server
           # Rebuild without the test harness and inspect the finished distributable.
           app/scripts/dir_build -p l -f
           python3 tools/branding/check-package.py app/staging/Zotero_linux-x86_64

@@ -6,9 +6,9 @@
 # The official release build branding.nsi is located in other-license/branding/firefox/
 # The nightly build branding.nsi is located in browser/installer/windows/nsis/
 
-# BrandFullNameInternal is used for some registry and file system values
-# instead of BrandFullName and typically should not be modified.
-!define BrandFullNameInternal "Zotero"
-!define CompanyName           "Corporation for Digital Scholarship"
-!define URLInfoAbout          "https://www.zotero.org"
-!define URLUpdateInfo         "https://www.zotero.org"
+# Installer ownership is separate from the retained Mozilla runtime identity.
+# Never discover or upgrade official installations through EpiLib's registry keys.
+!define BrandFullNameInternal "EpiLib"
+!define CompanyName           "EpiLib contributors"
+!define URLInfoAbout          "https://epilib.org/"
+!define URLUpdateInfo         "https://epilib.org/downloads"

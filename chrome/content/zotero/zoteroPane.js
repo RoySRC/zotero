@@ -556,7 +556,7 @@ var ZoteroPane = new function () {
 				let msg = '';
 				if (isDevBuild) {
 					label.onclick = function () {
-						Zotero.launchURL('https://www.zotero.org/support/kb/test_builds');
+						Zotero.launchURL(ZOTERO_CONFIG.SUPPORT_URL);
 					};
 					msg = 'TEST BUILD — DO NOT USE';
 				}
@@ -4261,6 +4261,7 @@ var ZoteroPane = new function () {
 			'loadReport',
 			'sep5',
 			'recognizePDF',
+			'refreshMetadata',
 			'refreshPublishedMetadata',
 			'unrecognize',
 			'createParent',
@@ -4310,6 +4311,12 @@ var ZoteroPane = new function () {
 		}
 		
 		var items = this.getSelectedItems();
+		// Keep enrichment independent of publication upgrades, including when a
+		// preprint or DOI-less publication can be resolved by title/byline.
+		if (!isTrash && items.length == 1 && Zotero.RecognizeDocument.canRefreshMetadata(items[0])) {
+			show.add(m.sep5);
+			show.add(m.refreshMetadata);
+		}
 		if (!isTrash && items.length == 1 && Zotero.RecognizeDocument.canRefreshPublishedMetadata(items[0])) {
 			show.add(m.sep5);
 			show.add(m.refreshPublishedMetadata);
@@ -4752,9 +4759,8 @@ var ZoteroPane = new function () {
 		menu.childNodes[m.loadReport].setAttribute('label', Zotero.getString('pane.items.menu.generateReport' + multiple));
 		menu.childNodes[m.createParent].setAttribute('label', Zotero.getString('pane.items.menu.createParent' + multiple));
 		menu.childNodes[m.recognizePDF].setAttribute('label', Zotero.getString('pane.items.menu.recognizeDocument'));
-		menu.childNodes[m.refreshPublishedMetadata].setAttribute('label', Zotero.getString(
-			items.length == 1 && items[0].itemTypeID == Zotero.ItemTypes.getID('preprint')
-				? 'recognition-refresh-published' : 'recognition-refresh-metadata'));
+		menu.childNodes[m.refreshMetadata].setAttribute('label', Zotero.getString('recognition-refresh-metadata'));
+		menu.childNodes[m.refreshPublishedMetadata].setAttribute('label', Zotero.getString('recognition-refresh-published'));
 		menu.childNodes[m.reindexItem].setAttribute('label', Zotero.getString('pane.items.menu.reindexItem' + multiple));
 		
 		// Hide and enable all actions by default (so if they're shown they're enabled)
@@ -6281,9 +6287,7 @@ var ZoteroPane = new function () {
 					),
 				[ZOTERO_CONFIG.CLIENT_NAME, ZOTERO_CONFIG.DOMAIN_NAME]
 			);
-		var supportURL = linkedFile
-			? 'https://www.zotero.org/support/kb/missing_linked_file'
-			: 'https://www.zotero.org/support/kb/files_not_syncing';
+		var supportURL = ZOTERO_CONFIG.SUPPORT_URL;
 		
 		var ps = Services.prompt;
 		
@@ -6396,17 +6400,23 @@ var ZoteroPane = new function () {
 		Zotero.ProgressQueues.get('recognize').getDialog().open();
 	};
 
-	/** Explicit, confirmed metadata refresh; errors remain in the current window. */
-	this.refreshSelectedPublishedMetadata = async function () {
+	/** Enrich the selection after review; publication upgrades must explicitly opt in. */
+	this.refreshSelectedMetadata = async function ({ publishedOnly = false } = {}) {
 		let items = this.getSelectedItems();
 		if (items.length != 1) return;
 		try {
-			await Zotero.RecognizeDocument.refreshPublishedMetadata(items[0]);
+			if (publishedOnly) await Zotero.RecognizeDocument.refreshPublishedMetadata(items[0]);
+			else await Zotero.RecognizeDocument.refreshMetadata(items[0]);
 		}
 		catch (error) {
 			Zotero.logError(error);
 			Zotero.alert(window, Zotero.getString('general.error'), error.message);
 		}
+	};
+
+	/** Preserve a distinct command so refreshing a preprint cannot silently upgrade it. */
+	this.refreshSelectedPublishedMetadata = function () {
+		return this.refreshSelectedMetadata({ publishedOnly: true });
 	};
 	
 	
@@ -7047,7 +7057,7 @@ var ZoteroPane = new function () {
 			return;
 		}
 		if (result == 2) {
-			Zotero.launchURL('https://www.zotero.org/support/kb/attachment_title_vs_filename');
+			Zotero.launchURL(ZOTERO_CONFIG.SUPPORT_URL);
 			return;
 		}
 		let attachments = new Set(this.getSelectedItems().flatMap((item) => {
@@ -7325,10 +7335,7 @@ var ZoteroPane = new function () {
 			
 			panel.removeAttribute('collapsed');
 			action.onclick = function () {
-				let url = Zotero.isBetaBuild
-					? 'https://www.zotero.org/support/beta_builds'
-					: 'https://www.zotero.org/download/';
-				Zotero.launchURL(url);
+				Zotero.launchURL(ZOTERO_CONFIG.DOWNLOAD_URL);
 			};
 			close.onclick = function () {
 				this.hideArchitectureWarning();
@@ -7409,7 +7416,7 @@ var ZoteroPane = new function () {
 		}
 		
 		document.getElementById('file-renaming-documentation-link').onclick = () => {
-			Zotero.launchURL("https://www.zotero.org/support/file_renaming");
+			Zotero.launchURL(ZOTERO_CONFIG.SUPPORT_URL);
 			// Do this in the next loop to avoid a visual glitch in Fx140.3 where the background
 			// color of the banner remains in part of the item pane header until switching to a
 			// different tab and back

@@ -92,7 +92,7 @@ pref("extensions.getAddons.link.url", "");
 pref("places.history.enabled", false);
 
 // Probably not used, but prevent an error in the console
-pref("app.support.baseURL", "https://www.zotero.org/support/");
+pref("app.support.baseURL", "https://epilib.org/");
 
 // Disable Telemetry, Health Report, error reporting, and remote settings
 pref("toolkit.telemetry.unified", false);
@@ -111,16 +111,16 @@ pref("extensions.experiments.enabled", true);
 
 // Not set on Windows in Firefox anymore since it's a per-installation pref,
 // but we override that in fetch_xulrunner
-// The retained upstream URL is not an EpiLib release feed.
+// Defense in depth; the packaged Gecko updater is disabled independently of prefs.
 pref("app.update.auto", false);
 
 // URL user can browse to manually if for some reason all update installation
 // attempts fail.
-pref("app.update.url.manual", "https://www.zotero.org/download");
+pref("app.update.url.manual", "https://github.com/epilib-org/epilib-desktop/releases");
 
 // A default value for the "More information about this update" link
 // supplied in the "An update is available" page of the update wizard.
-pref("app.update.url.details", "https://www.zotero.org/support/changelog");
+pref("app.update.url.details", "https://github.com/epilib-org/epilib-desktop/releases");
 
 // Interval: Time between checks for a new version (in seconds)
 //           default=1 day

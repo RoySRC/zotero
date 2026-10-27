@@ -666,9 +666,6 @@ mv omni.ja ..
 cd "$CALLDIR"
 rm -rf "$omni_dir"
 
-# Copy updater.ini
-cp "$CALLDIR/assets/updater.ini" "$base_dir"
-
 # Adjust chrome.manifest
 #perl -pi -e 's^(chrome|resource)/^jar:zotero.jar\!/$1/^g' "$BUILD_DIR/zotero/chrome.manifest"
 
@@ -714,11 +711,6 @@ if [ $BUILD_MAC == 1 ]; then
 		cp -R "$MAC_RUNTIME_PATH/../MacOS/." "$CONTENTSDIR/MacOS/"
 	fi
 
-	# Use our own updater, because Mozilla's requires updates signed by Mozilla
-	cd "$CONTENTSDIR/MacOS"
-	check_lfs_file "$CALLDIR/mac/updater.tar.xz"
-	tar xf "$CALLDIR/mac/updater.tar.xz"
-
 	# Modify Info.plist
 	perl -pi -e "s/\{\{VERSION\}\}/$VERSION/" "$CONTENTSDIR/Info.plist"
 	perl -pi -e "s/\{\{VERSION_NUMERIC\}\}/$VERSION_NUMERIC/" "$CONTENTSDIR/Info.plist"
@@ -740,6 +732,7 @@ if [ $BUILD_MAC == 1 ]; then
 	
 	# Copy app files
 	copy_dir "$base_dir" "$CONTENTSDIR/Resources"
+	python3 "$CALLDIR/../tools/updates/harden-runtime.py" "$APPDIR"
 	
 	# Add word processor plug-ins
 	mkdir "$CONTENTSDIR/Resources/integration"
@@ -832,11 +825,9 @@ if [ $BUILD_MAC == 1 ]; then
 		# Clear extended attributes, which can cause codesign to fail
 		/usr/bin/xattr -cr "$APPDIR"
 
-		# Sign libraries and updater without entitlements
+		# Sign libraries without entitlements. EpiLib does not ship a MAR updater.
 		/usr/bin/codesign --force --options runtime --sign "$DEVELOPER_ID" \
 			"$APPDIR/Contents/MacOS/XUL" \
-			"$APPDIR/Contents/MacOS/updater.app/Contents/Frameworks/UpdateSettings.framework" \
-			"$APPDIR/Contents/MacOS/updater.app" \
 			"$APPDIR/Contents/Frameworks/ChannelPrefs.framework"
 		find "$APPDIR/Contents" -name '*.dylib' -print0 | xargs -0 /usr/bin/codesign --force --options runtime --sign "$DEVELOPER_ID"
 		
@@ -980,10 +971,6 @@ if [ $BUILD_WIN == 1 ]; then
 		check_lfs_file "$CALLDIR/win/zotero.exe.tar.xz"
 		tar xf "$CALLDIR/win/zotero.exe.tar.xz" --to-stdout zotero_$arch.exe > "$APPDIR/zotero.exe"
 		
-		# Use our own updater, because Mozilla's requires updates signed by Mozilla
-		check_lfs_file "$CALLDIR/win/updater.exe.tar.xz"
-		tar xf "$CALLDIR/win/updater.exe.tar.xz" --to-stdout updater-$arch.exe > "$APPDIR/updater.exe"
-		
 		# Update .exe version numbers (only possible on Windows)
 		if [ $WIN_NATIVE == 1 ]; then
 			# FileVersion is limited to four integers, so it won't be properly updated for non-release
@@ -995,21 +982,17 @@ if [ $BUILD_WIN == 1 ]; then
 				--set-version-string ProductName "EpiLib" \
 				--set-version-string FileDescription "EpiLib" \
 				--set-icon "`cygpath -w \"$CALLDIR/win/zotero.ico\"`"
-			rcedit "`cygpath -w \"$APPDIR/updater.exe\"`" \
-				--set-file-version "$VERSION_NUMERIC" \
-				--set-product-version "$VERSION" \
-				--set-version-string ProductName "EpiLib" \
-				--set-version-string FileDescription "EpiLib Updater"
 		fi
 		
 		# Copy app files
 		copy_dir "$base_dir" "$APPDIR"
+		python3 "$CALLDIR/../tools/updates/harden-runtime.py" "$APPDIR"
 		#mv "$APPDIR/app/application.ini" "$APPDIR/"
 		
 		# Copy in common files
 		copy_dir "$COMMON_APPDIR" "$APPDIR"
-		
-		cat "$CALLDIR/win/installer/updater_append.ini" >> "$APPDIR/updater.ini"
+		# Keep installation ownership separate from the compatible runtime app ID.
+		cp "$CALLDIR/assets/epilib-install.ini" "$APPDIR/epilib-install.ini"
 		
 		# Add devtools
 		#if [ $DEVTOOLS -eq 1 ]; then
@@ -1052,8 +1035,6 @@ if [ $BUILD_WIN == 1 ]; then
 		
 		if [[ $PACKAGE -eq 1 ]] && [[ $SIGN -eq 1 ]]; then
 			"$CALLDIR/win/codesign" "$APPDIR/zotero.exe" "$SIGNATURE_DESC"
-			sleep $SIGNTOOL_DELAY
-			"$CALLDIR/win/codesign" "$APPDIR/updater.exe" "$SIGNATURE_DESC Updater"
 			sleep $SIGNTOOL_DELAY
 			# Re-sign modified xul.dll
 			"$CALLDIR/win/codesign" "$APPDIR/xul.dll" "$SIGNATURE_DESC"
@@ -1174,13 +1155,9 @@ if [ $BUILD_LINUX == 1 ]; then
 		cp "$CALLDIR/linux/zotero.desktop" "$APPDIR"
 		cp "$CALLDIR/linux/set_launcher_icon" "$APPDIR"
 		
-		# Use our own updater, because Mozilla's requires updates signed by Mozilla
-		check_lfs_file "$CALLDIR/linux/updater.tar.xz"
-		tar xf "$CALLDIR/linux/updater.tar.xz" --to-stdout updater-$arch > "$APPDIR/updater"
-		chmod 755 "$APPDIR/updater"
-
 		# Copy app files
 		copy_dir "$base_dir" "$APPDIR"
+		python3 "$CALLDIR/../tools/updates/harden-runtime.py" "$APPDIR"
 		
 		# Add word processor plug-ins
 		mkdir "$APPDIR/integration"

@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero/skin/zotero.css" type="text/css"?>
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml" windowtype="EpiLib:Updates"
+        title="EpiLib Updates" data-l10n-id="epilib-updates-window"
+        style="min-width: 460px; max-width: 620px;" onload="EpiLibUpdateWindow.init()">
+  <linkset><html:link rel="localization" href="zotero.ftl"/></linkset>
+  <script src="chrome://zotero/content/include.js"/>
+  <script src="chrome://zotero/content/customElements.js"/>
+  <script src="chrome://zotero/content/update/epilibUpdates.js"/>
+  <vbox style="padding: 24px; gap: 16px;">
+    <html:h2 data-l10n-id="epilib-updates-heading">EpiLib Updates</html:h2>
+    <html:p id="epilib-update-status" role="status" aria-live="polite"
+            style="white-space: normal;" data-l10n-id="epilib-updates-checking">Checking for updates...</html:p>
+    <checkbox id="epilib-update-auto" label="Check for EpiLib updates automatically"
+              data-l10n-id="epilib-updates-automatic"
+              oncommand="Zotero.Prefs.set('epilib.updates.enabled', this.checked)"/>
+    <hbox pack="end" style="gap: 8px;">
+      <button id="epilib-update-check" label="Check Again" data-l10n-id="epilib-updates-check"
+              oncommand="EpiLibUpdateWindow.refresh()"/>
+      <button id="epilib-update-release" label="Open Release Page" data-l10n-id="epilib-updates-open"
+              oncommand="Zotero.EpiLibUpdates.openReleasePage(EpiLibUpdateWindow.version)"/>
+      <button label="Close" data-l10n-id="epilib-updates-close" oncommand="window.close()"/>
+    </hbox>
+  </vbox>
+</window>

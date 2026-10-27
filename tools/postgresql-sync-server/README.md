@@ -62,6 +62,35 @@ database and start a test server on an available port. The connection's role
 must have `CREATEDB` permission. The supplied database is not modified. Without
 `TEST_DATABASE_URL`, the integration tests are skipped.
 
+### Publication-update regression
+
+Bulk `POST` requests contain partial updates, even when `itemType` changes.
+Omitted fields must retain their stored values; only explicitly supplied fields
+are replaced. The server must return a complete record, because the desktop
+applies that success response as authoritative metadata. Treating a type-changing
+patch as a replacement previously erased the unchanged title and collections.
+Obsolete empty fields must also be omitted from type-change responses so the
+desktop's strict importer does not reject, for example, `archiveID` on a
+conference paper.
+
+`object-updates.test.mjs` reproduces the server failure through HTTP and a real
+database. `recognitionEngineTest.js` checks the native update and patch serializer.
+For the full native client/server round trip, run from a checkout with a working
+desktop build toolchain:
+
+```sh
+TEST_DATABASE_URL="$DATABASE_URL" npm run test:desktop
+```
+
+This command creates a disposable server database, synthetic account token and
+isolated desktop profile, then runs `publicationSyncTest.js`. Only the catalog
+result and review selection are stubbed. The real sync engine, HTTP API, success
+response, cache and SQLite reload must preserve title, collections, citation key,
+abstract, PDF, note and annotation identities. The database is removed afterward.
+Unlike `npm test`, this command fails if its database configuration is missing;
+both the branding gate and upstream merge workflow require it. On headless Linux,
+prefix the command with `xvfb-run -a`.
+
 ## Authentication
 
 Authentication is database-backed. Imported Zotero identities are stored in

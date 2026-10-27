@@ -248,7 +248,7 @@ Zotero_Preferences.Sync = {
 			"chrome,dialog,dependent,modal,centerscreen", io);
 
 		if (io.extra2) {
-			Zotero.launchURL("https://www.zotero.org/support/kb/switching_accounts");
+			Zotero.launchURL(ZOTERO_CONFIG.SUPPORT_URL);
 			return;
 		}
 
@@ -864,17 +864,16 @@ Zotero_Preferences.Sync = {
 			), true);
 			return false;
 		}
-		if (!(await Zotero.Sync.Metadata.hasPostgreSQLAPIKey())) {
-			document.getElementById('metadata-postgresql-username').focus();
-			this._setMetadataSyncStatus(this._formatMetadataMessage(
-				'preferences-sync-metadata-postgresql-login-required'
-			), true);
-			return false;
-		}
-
 		let options = { url };
 
 		try {
+			if (!(await Zotero.Sync.Metadata.hasPostgreSQLAPIKey({ url }))) {
+				document.getElementById('metadata-postgresql-username').focus();
+				this._setMetadataSyncStatus(this._formatMetadataMessage(
+					'preferences-sync-metadata-postgresql-login-required'
+				), true);
+				return false;
+			}
 			await Zotero.Sync.Metadata.configurePostgreSQL(options);
 		}
 		catch (e) {
@@ -1135,7 +1134,7 @@ Zotero_Preferences.Sync = {
 			);
 			if (!ok) {
 				this._finishMetadataLoadingStatus('Account identity check was cancelled');
-				await Zotero.Sync.Metadata.clearPostgreSQLAPIKey();
+				await Zotero.Sync.Metadata.clearPostgreSQLAPIKey({ url, userID: result.userID });
 				return;
 			}
 			this._appendMetadataLoadStatus('Account identity accepted');

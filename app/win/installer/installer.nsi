@@ -59,10 +59,10 @@ Var InstallType
 !insertmacro WordFind
 !insertmacro WordReplace
 
-!include nsProcess.nsh
 ; The following includes are custom.
 !include branding.nsi
 !include defines.nsi
+!include isolation.nsh
 !include common.nsh
 !include locales.nsi
 
@@ -85,7 +85,6 @@ VIAddVersionKey "OriginalFilename" "setup.exe"
 !insertmacro LogDesktopShortcut
 !insertmacro LogQuickLaunchShortcut
 !insertmacro LogStartMenuShortcut
-!insertmacro ManualCloseAppPrompt
 !insertmacro RegCleanMain
 !insertmacro RegCleanUninstall
 !insertmacro SetAppLSPCategories
@@ -168,89 +167,16 @@ Page custom preSummary
 ; Use the default dialog for IDD_VERIFY for a simple Banner
 ChangeUI IDD_VERIFY "${NSISDIR}\Contrib\UIs\default.exe"
 
-; If a version beginning with $R1 is installed, uninstall that.
-; This is used to uninstall the old Zotero Standalone installer and a 32-bit version on 64-bit Windows
-Function UninstallOld
-  Push $R1
-  Push $R2
-  StrCpy $0 0
-  StrCpy $5 "HKLM"
-  SetShellVarContext all
-
-  enum_uninst_keys:
-    EnumRegKey $1 SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall" $0
-    StrCmp $1 "" switch_root_key_or_continue
-    ; $R1 is "Zotero", registry key name contains version and locale e.g. "Zotero 6.0.0 (x86 en-US)" so:
-    StrLen $3 $R1 ; $3 = length of $R1, e.g. 6 for "Zotero"
-    StrCpy $2 $1 $3 ; $2 = first $3 characters of $1, i.e. name without version and locale, e.g. "Zotero"
-    StrCmp $2 $R1 get_uninst_exe ; if the key we found is the one we're looking for (e.g. "Zotero"), go to get_uninst_exe
-    IntOp $0 $0 + 1 
-    Goto enum_uninst_keys ; loop through all keys
-
-  switch_root_key_or_continue:
-    # Previous installation was not found in HKLM, switch to HKCU (using SetShellVarContext) and search again
-    # $5 is used to ensure this only happens once
-    StrCmp $5 "HKLM" +1 continue_installation
-    StrCpy $5 "HKCU"
-    StrCpy $0 0
-    SetShellVarContext current
-    Goto enum_uninst_keys
-
-  get_uninst_exe:
-    ReadRegStr $2 SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\$1" "UninstallString"
-    ReadRegStr $3 SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\$1" "InstallLocation"
-
-  MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-    $R2 \
-    /SD IDOK IDOK uninst
-  Abort
-
-  uninst:
-    ; This doesn't actually wait, since the uninstaller copies itself to a temp folder, runs that,
-    ; and exits, so give it a few seconds to finish
-    ExecWait '"$2" /S'
-    Sleep 3000
-
-    ; Files that were added by an in-app update won't be automatically deleted by the 4.0 uninstaller,
-    ; so manually delete everything we know about as long as the directory name begins with "Zotero".
-    ; We don't just delete the directory because we don't know for sure that the user didn't do
-    ; something crazy like put their data directory in it.
-    ${GetFileName} $3 $4
-    StrCpy $5 $4 6
-    StrCmp $5 "Zotero" +1 continue_installation
-    RMDir /r "$3\chrome"
-    RMDir /r "$3\components"
-    RMDir /r "$3\defaults"
-    RMDir /r "$3\dictionaries"
-    RMDir /r "$3\extensions"
-    RMDir /r "$3\fonts"
-    RMDir /r "$3\gmp-clearkey"
-    RMDir /r "$3\uninstall"
-    RMDir /r "$3\xulrunner"
-    Delete "$3\*.chk"
-    Delete "$3\*.dll"
-    Delete "$3\*.exe"
-    Delete "$3\Accessible.tlb"
-    Delete "$3\dependentlibs.list"
-    Delete "$3\firefox.VisualElementsManifest.xml"
-    Delete "$3\omni.ja"
-    Delete "$3\platform.ini"
-    Delete "$3\precomplete"
-    Delete "$3\voucher.bin"
-    RMDir $3
-
-  continue_installation:
-    ; End uninstallation
-    SetShellVarContext current
-    Pop $R2
-    Pop $R1
-FunctionEnd
+; Existing EpiLib installations are upgraded in place. Do not enumerate or
+; launch other products' uninstallers, even for an architecture change.
 
 ################################################################################
 # Install Sections
 
 ; Cleanup operations to perform at the start of the installation.
 Section "-InstallStartCleanup"
+  ; Recheck after UI/command-line path selection, before the first file deletion.
+  !insertmacro EpiLibCheckInstallDirectory
   ; I don't know that software upgrades are working correctly, but this
   ; ensures that CheckExistingInstall always gets called.
   IfSilent +1 non_silent
@@ -276,15 +202,12 @@ Section "-InstallStartCleanup"
     Pop $R9
 
   non_silent:
-  ; Try to delete the app executable and if we can't delete it try to find the
-  ; app's message window and prompt the user to close the app. This allows
-  ; running an instance that is located in another directory. If for whatever
-  ; reason there is no message window we will just rename the app's files and
-  ; then remove them on restart.
+  ; Check only this installation's executable. A locked file stops setup;
+  ; a running official client in another directory is left alone.
   ClearErrors
   ${DeleteFile} "$INSTDIR\${FileMainEXE}"
   ${If} ${Errors}
-    ${ManualCloseAppPrompt} "${WindowClass}" "$(WARN_MANUALLY_CLOSE_APP_INSTALL)"
+    !insertmacro EpiLibFilesInUse "$(WARN_MANUALLY_CLOSE_APP_INSTALL)"
   ${EndIf}
 
   SetDetailsPrint both
@@ -306,8 +229,7 @@ Section "-InstallStartCleanup"
     ClearErrors
   ${EndIf}
 
-  ; Remove the updates directory for Vista and above
-  ${CleanUpdatesDir} "Zotero\Zotero"
+  ; Native upstream updates are disabled. Never touch the shared update cache.
 
 
   ${InstallStartCleanupCommon}
@@ -356,25 +278,25 @@ Section "-Application" APP_IDX
 
   ${LogHeader} "Adding Registry Entries"
   SetShellVarContext current  ; Set SHCTX to HKCU
-  ${RegCleanMain} "Software\Zotero"
+  ${RegCleanMain} "${InstallerRegistryKey}"
   ${RegCleanUninstall}
   ${UpdateProtocolHandlers}
 
   ClearErrors
-  WriteRegStr HKLM "Software\Zotero" "${BrandShortName}InstallerTest" "Write Test"
+  WriteRegStr HKLM "${InstallerRegistryKey}" "${BrandShortName}InstallerTest" "Write Test"
   ${If} ${Errors}
     StrCpy $TmpVal "HKCU" ; used primarily for logging
   ${Else}
     SetShellVarContext all  ; Set SHCTX to HKLM
-    DeleteRegValue HKLM "Software\Zotero" "${BrandShortName}InstallerTest"
+    DeleteRegValue HKLM "${InstallerRegistryKey}" "${BrandShortName}InstallerTest"
     StrCpy $TmpVal "HKLM" ; used primarily for logging
-    ${RegCleanMain} "Software\Zotero"
+    ${RegCleanMain} "${InstallerRegistryKey}"
     ${RegCleanUninstall}
     ${UpdateProtocolHandlers}
 
-    ReadRegStr $0 HKLM "Software\zotero.org\Zotero" "CurrentVersion"
+    ReadRegStr $0 HKLM "${InstallerRegistryKey}\Runtime" "CurrentVersion"
     ${If} "$0" != "${GREVersion}"
-      WriteRegStr HKLM "Software\zotero.org\Zotero" "CurrentVersion" "${GREVersion}"
+      WriteRegStr HKLM "${InstallerRegistryKey}\Runtime" "CurrentVersion" "${GREVersion}"
     ${EndIf}
   ${EndIf}
 
@@ -396,7 +318,7 @@ Section "-Application" APP_IDX
 
   ; These need special handling on uninstall since they may be overwritten by
   ; an install into a different location.
-  StrCpy $0 "Software\Microsoft\Windows\CurrentVersion\App Paths\${FileMainEXE}"
+  StrCpy $0 "Software\Microsoft\Windows\CurrentVersion\App Paths\${AppPathAlias}"
   ${WriteRegStr2} $TmpVal "$0" "" "$INSTDIR\${FileMainEXE}" 0
   ${WriteRegStr2} $TmpVal "$0" "Path" "$INSTDIR" 0
 
@@ -618,6 +540,7 @@ Function AddQuickLaunchShortcut
 FunctionEnd
 
 Function CheckExistingInstall
+  !insertmacro EpiLibCheckInstallDirectory
   UserInfo::GetAccountType
   pop $0 ; $0 = "Admin" or "User" or "Guest". This is the account type.
 
@@ -679,14 +602,13 @@ Function CheckExistingInstall
 
     ${If} "$TmpVal" == "true"
       StrCpy $TmpVal "FoundMessageWindow"
-      ${ManualCloseAppPrompt} "${WindowClass}" "$(WARN_MANUALLY_CLOSE_APP_INSTALL)"
-      StrCpy $TmpVal "true"
+      !insertmacro EpiLibFilesInUse "$(WARN_MANUALLY_CLOSE_APP_INSTALL)"
     ${EndIf}
   ${EndIf}
 FunctionEnd
 
 Function LaunchApp
-  ${ManualCloseAppPrompt} "${WindowClass}" "$(WARN_MANUALLY_CLOSE_APP_LAUNCH)"
+  ; Do not look for or close another application with the same window class.
 
   ClearErrors
   ${GetParameters} $0
@@ -702,12 +624,14 @@ FunctionEnd
 Function LaunchAppFromElevatedProcess
   ; Find the installation directory when launching using GetFunctionAddress
   ; from an elevated installer since $INSTDIR will not be set in this installer
-  ReadRegStr $0 HKLM "Software\Classes\zotero\DefaultIcon" ""
-  ${GetPathFromString} "$0" $0
-  ${GetParent} "$0" $1
+  ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\${AppPathAlias}" ""
+  ; App Paths contains a raw filename, not a command line. Preserve spaces in
+  ; Program Files and verify ownership before using the registered executable.
+  ${GetParent} "$0" $INSTDIR
+  !insertmacro EpiLibRequireOwnedInstall
   ; Set our current working directory to the application's install directory
   ; otherwise the 7-Zip temp directory will be in use and won't be deleted.
-  SetOutPath "$1"
+  SetOutPath "$INSTDIR"
   Exec "$\"$0$\""
 FunctionEnd
 
@@ -880,9 +804,9 @@ Function preSummary
 
   ; Check if it is possible to write to HKLM
   ClearErrors
-  WriteRegStr HKLM "Software\Zotero" "${BrandShortName}InstallerTest" "Write Test"
+  WriteRegStr HKLM "${InstallerRegistryKey}" "${BrandShortName}InstallerTest" "Write Test"
   ${Unless} ${Errors}
-    DeleteRegValue HKLM "Software\Zotero" "${BrandShortName}InstallerTest"
+    DeleteRegValue HKLM "${InstallerRegistryKey}" "${BrandShortName}InstallerTest"
     ; Check if Firefox is the http handler for this user.
     SetShellVarContext current ; Set SHCTX to the current user
     ${IsHandlerForInstallDir} "http" $R9
@@ -952,6 +876,13 @@ Function .onInit
 
   ${InstallOnInitCommon} "$(WARN_MIN_SUPPORTED_OS_MSG)"
 
+  ; Refuse repackaged installers with a missing/wrong product marker.
+  ReadINIStr $0 "$EXEDIR\core\${InstallMarker}" "Product" "InstallerIdentity"
+  ${If} $0 != "epilib-desktop"
+    MessageBox MB_OK|MB_ICONSTOP "The EpiLib installer payload is missing its identity marker." /SD IDOK
+    Quit
+  ${EndIf}
+
   !ifdef HAVE_64BIT_BUILD
     ${If} "${ARCH}" == "AArch64"
       ${IfNot} ${IsNativeARM64}
@@ -966,38 +897,14 @@ Function .onInit
     ${EndIf}
   !endif
 
-  # Check if Zotero is running. If it is, prompt the user to close Zotero and exit.
-  # For silent installs, kill Zotero and if successful, continue with the install.
-  ${nsProcess::FindProcess} ${FileMainEXE} $R0
-  ${If} $R0 = 0
-    IfSilent +3
-    MessageBox MB_OK|MB_ICONSTOP "Zotero is already running. Please close Zotero before running the installer."
-    Quit
-    ${nsProcess::KillProcess} ${FileMainEXE} $R0
-    Sleep 500
-    ${nsProcess::FindProcess} ${FileMainEXE} $R0
-    ${If} $R0 = 0
-      Quit
-    ${EndIf}
-  ${EndIf}
-
-  StrCpy $R1 "Zotero Standalone"
-  StrCpy $R2 "An older version of Zotero is installed. If you continue, the existing version will be removed.$\n$\nYour Zotero data will not be affected."
-  Call UninstallOld
-
-  !ifdef HAVE_64BIT_BUILD
-    SetRegView 32
-      StrCpy $R1 "Zotero"
-      StrCpy $R2 "A 32-bit version of Zotero is installed. If you continue, it will be replaced with a 64-bit version that offers better performance.$\n$\nYour Zotero data will not be affected."
-      Call UninstallOld
-    SetRegView 64
-  !endif
+  ; Files-in-use checks below are restricted to $INSTDIR. Never kill processes
+  ; by executable name or uninstall another product during EpiLib setup.
 
   !ifdef HAVE_64BIT_BUILD
     ${If} "${ARCH}" == "x64"
       ${If} ${IsNativeARM64}
         MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION|MB_DEFBUTTON2 \
-          "This installer is for the x64 version of Zotero, but you appear to be running an ARM version of Windows.$\n$\nFor the best performance, please cancel and download the ARM version of Zotero for Windows." \
+          "This installer is for the x64 version of EpiLib, but you appear to be running an ARM version of Windows.$\n$\nFor the best performance, please cancel and download the ARM version of EpiLib for Windows." \
           /SD IDOK IDOK continue_architecture IDCANCEL cancel_architecture
           cancel_architecture:
             Abort
@@ -1009,7 +916,7 @@ Function .onInit
   !ifndef HAVE_64BIT_BUILD
     ${If} ${RunningX64}
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION|MB_DEFBUTTON2 \
-        "This installer is for the 32-bit version of Zotero, but you appear to be running a 64-bit version of Windows.$\n$\nFor the best performance, please cancel and download the 64-bit version of Zotero." \
+        "This installer is for the 32-bit version of EpiLib, but you appear to be running a 64-bit version of Windows.$\n$\nFor the best performance, please cancel and download the 64-bit version of EpiLib." \
         /SD IDOK IDOK continue_architecture IDCANCEL cancel_architecture
         cancel_architecture:
           Abort

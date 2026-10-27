@@ -40,6 +40,8 @@ Zotero.Sync.Metadata = {
 	_loginManagerHost: 'chrome://zotero',
 	_loginManagerRealm: 'Zotero PostgreSQL Metadata Server API Key',
 	_loginManagerUsername: 'postgresql-metadata',
+	_legacyCredentialScopePref: 'sync.metadata.postgresql.legacyCredentialScope',
+	_credentialRevision: 0,
 
 	getBackend() {
 		// Ignore legacy backend preferences without changing local library data.
@@ -59,6 +61,8 @@ Zotero.Sync.Metadata = {
 	},
 
 	async configurePostgreSQL(options = {}) {
+		this.pinLegacyCredentialScope();
+		const context = this.getCredentialContext();
 		let url = `${options.url || ''}`.trim();
 		if (!url) {
 			throw new Error("PostgreSQL metadata server URL not provided");
@@ -66,14 +70,21 @@ Zotero.Sync.Metadata = {
 		if (!/^https?:\/\//i.test(url)) {
 			throw new Error("PostgreSQL metadata server URL must start with http:// or https://");
 		}
-		Zotero.Prefs.set(this._backendPref, this.BACKEND_POSTGRESQL);
-		Zotero.Prefs.set(this._postgreSQLURLPref, this.normalizePostgreSQLBaseURL(url));
+		url = this.normalizePostgreSQLBaseURL(url);
 		if (options.apiKey !== undefined) {
-			await this.setPostgreSQLAPIKey(options.apiKey);
+			const saving = this.setPostgreSQLAPIKey(options.apiKey, { url, userID: options.userID });
+			const revision = this._credentialRevision;
+			await saving;
+			this.assertCredentialContext({ ...context, revision });
 		}
+		else this._credentialRevision++;
+		// Change the active destination only after encrypted persistence succeeds.
+		Zotero.Prefs.set(this._backendPref, this.BACKEND_POSTGRESQL);
+		Zotero.Prefs.set(this._postgreSQLURLPref, url);
 	},
 
 	async loginPostgreSQL(options = {}) {
+		const context = this._beginAuthentication();
 		let url = this.normalizePostgreSQLBaseURL(`${options.url || ''}`.trim());
 		let username = `${options.username || ''}`.trim();
 		let password = `${options.password || ''}`;
@@ -112,11 +123,13 @@ Zotero.Sync.Metadata = {
 		if (!json.username) {
 			throw new Error("username not found in PostgreSQL login response");
 		}
-		await this.configurePostgreSQL({ url, apiKey: json.apiKey });
+		this.assertCredentialContext(context);
+		await this.configurePostgreSQL({ url, userID: json.userID, apiKey: json.apiKey });
 		return json;
 	},
 
 	async registerPostgreSQL(options = {}) {
+		const context = this._beginAuthentication();
 		let url = this.normalizePostgreSQLBaseURL(`${options.url || ''}`.trim());
 		let username = `${options.username || ''}`.trim();
 		let password = `${options.password || ''}`;
@@ -131,7 +144,8 @@ Zotero.Sync.Metadata = {
 		let headers = {
 			'Content-Type': 'application/json'
 		};
-		let apiKey = await this.getPostgreSQLAPIKey();
+		let apiKey = await this.getPostgreSQLAPIKey({ url });
+		this.assertCredentialContext(context);
 		if (apiKey) {
 			headers['Zotero-API-Key'] = apiKey;
 		}
@@ -165,11 +179,13 @@ Zotero.Sync.Metadata = {
 		if (!json.username) {
 			throw new Error("username not found in PostgreSQL account creation response");
 		}
-		await this.configurePostgreSQL({ url, apiKey: json.apiKey });
+		this.assertCredentialContext(context);
+		await this.configurePostgreSQL({ url, userID: json.userID, apiKey: json.apiKey });
 		return json;
 	},
 
 	async resetPostgreSQLPassword(options = {}) {
+		const context = this._beginAuthentication();
 		let url = this.normalizePostgreSQLBaseURL(`${options.url || ''}`.trim());
 		let username = `${options.username || ''}`.trim();
 		let oldPassword = `${options.oldPassword || ''}`;
@@ -216,7 +232,8 @@ Zotero.Sync.Metadata = {
 		if (!json.username) {
 			throw new Error("username not found in PostgreSQL password reset response");
 		}
-		await this.configurePostgreSQL({ url, apiKey: json.apiKey });
+		this.assertCredentialContext(context);
+		await this.configurePostgreSQL({ url, userID: json.userID, apiKey: json.apiKey });
 		return json;
 	},
 
@@ -232,12 +249,14 @@ Zotero.Sync.Metadata = {
 	},
 
 	async fetchPostgreSQLSyncSettings(options = {}) {
+		const context = this.getCredentialContext();
 		let url = options.url
 			? this.normalizePostgreSQLBaseURL(options.url)
 			: this.getPostgreSQLBaseURL();
 		let apiKey = options.apiKey !== undefined
 			? options.apiKey
-			: await this.getPostgreSQLAPIKey();
+			: await this.getPostgreSQLAPIKey({ url, userID: options.userID });
+		this.assertCredentialContext(context);
 		if (!url || !apiKey) {
 			return null;
 		}
@@ -259,22 +278,23 @@ Zotero.Sync.Metadata = {
 	},
 
 		async savePostgreSQLSyncSettings(settings = null) {
+			const context = this.getCredentialContext();
 			let url = this.getPostgreSQLBaseURL();
-			let apiKey = await this.getPostgreSQLAPIKey();
-		if (!url || !apiKey) {
-			return false;
-		}
+			let apiKey = await this.getPostgreSQLAPIKey({ url });
+			if (!url || !apiKey) return false;
+			const body = JSON.stringify(settings || await this.getLocalSyncSettings());
+			this.assertCredentialContext(context);
 		await Zotero.HTTP.request(
 			'PUT',
 			url + 'sync/settings',
 			{
-				body: JSON.stringify(settings || await this.getLocalSyncSettings()),
+				body,
 				headers: {
 					'Content-Type': 'application/json',
 					'Zotero-API-Key': apiKey
 				},
 				successCodes: [204],
-				timeout: 5000
+				timeout: 5000, anon: true, followRedirects: false, logBodyLength: 0, debug: false
 			}
 		);
 			return true;
@@ -476,63 +496,132 @@ Zotero.Sync.Metadata = {
 	},
 
 	async disablePostgreSQL() {
+		await this.clearPostgreSQLAPIKey();
 		Zotero.Prefs.set(this._backendPref, this.BACKEND_POSTGRESQL);
 		Zotero.Prefs.clear(this._postgreSQLURLPref);
-		await this.clearPostgreSQLAPIKey();
 	},
 
-	async getPostgreSQLAPIKey() {
-		let login = await this._getPostgreSQLLoginInfo();
-		return login ? login.password : null;
+	/** Nonsecret snapshot used to reject late login, unlock or request continuations. */
+	getCredentialContext() {
+		return { url: Zotero.Prefs.get(this._postgreSQLURLPref) || '',
+			userID: Zotero.Users.getCurrentUserID() || null, revision: this._credentialRevision };
 	},
 
-	async hasPostgreSQLAPIKey() {
-		return !!(await this._getPostgreSQLLoginInfo());
-	},
-
-	async setPostgreSQLAPIKey(apiKey) {
-		apiKey = `${apiKey || ''}`;
-		let oldLoginInfo = await this._getPostgreSQLLoginInfo();
-		if (!apiKey) {
-			if (oldLoginInfo) {
-				await Services.logins.removeLoginAsync(oldLoginInfo);
-			}
-			return;
-		}
-
-		let nsLoginInfo = new Components.Constructor(
-			"@mozilla.org/login-manager/loginInfo;1",
-			Components.interfaces.nsILoginInfo,
-			"init"
-		);
-		let loginInfo = new nsLoginInfo(
-			this._loginManagerHost,
-			null,
-			this._loginManagerRealm,
-			this._loginManagerUsername,
-			apiKey,
-			"",
-			""
-		);
-
-		if (oldLoginInfo) {
-			await Services.logins.modifyLoginAsync(oldLoginInfo, loginInfo);
-		}
-		else {
-			await Services.logins.addLoginAsync(loginInfo);
+	assertCredentialContext(context) {
+		if (JSON.stringify(context) != JSON.stringify(this.getCredentialContext())) {
+			throw new Error('Metadata server or account changed; please try again');
 		}
 	},
 
-	async clearPostgreSQLAPIKey() {
-		let login = await this._getPostgreSQLLoginInfo();
-		if (login) {
-			await Services.logins.removeLoginAsync(login);
+	/** Invalidate pending unlocks/authentication before starting a new login attempt. */
+	_beginAuthentication() {
+		this.pinLegacyCredentialScope();
+		this._credentialRevision++;
+		return this.getCredentialContext();
+	},
+
+	/** Canonical URL (including path) plus the server's user ID identifies one token. */
+	getPostgreSQLCredentialScope(options = {}) {
+		const url = options.url !== undefined ? options.url : this.getPostgreSQLBaseURL();
+		const userID = options.userID !== undefined ? options.userID : Zotero.Users.getCurrentUserID();
+		if (!url || !userID) return null;
+		if (!Number.isSafeInteger(Number(userID)) || Number(userID) <= 0) throw new Error('Invalid metadata account user ID');
+		return { url: this.normalizePostgreSQLBaseURL(url), userID: Number(userID) };
+	},
+
+	/**
+	 * The old global login has no provenance. Pin its one possible owner at startup,
+	 * before Settings can change the destination. Never infer a new owner later.
+	 * Missing/invalid identity is recorded as null and requires a fresh login.
+	 */
+	pinLegacyCredentialScope() {
+		if (Zotero.Prefs.get(this._legacyCredentialScopePref) !== undefined) return;
+		let scope = null;
+		try { scope = this.getPostgreSQLCredentialScope(); }
+		catch (_) { /* Do not guess a destination for an unscoped secret. */ }
+		Zotero.Prefs.set(this._legacyCredentialScopePref, JSON.stringify(scope));
+	},
+
+	/** A legacy login is eligible only for the pinned original server/user pair. */
+	_credentialDescriptor(scope) {
+		this.pinLegacyCredentialScope();
+		let legacy;
+		try { legacy = JSON.parse(Zotero.Prefs.get(this._legacyCredentialScopePref)); }
+		catch (_) { legacy = null; }
+		return { realm: 'EpiLib PostgreSQL account token v1: ' + JSON.stringify([scope.url, scope.userID]),
+			username: this._loginManagerUsername,
+			legacyRealm: JSON.stringify(legacy) == JSON.stringify(scope) ? this._loginManagerRealm : null };
+	},
+
+	/** Reject malformed secrets without putting their contents in an error message. */
+	_validateAPIKey(value) {
+		if (typeof value != 'string' || !value || value.length > 4096 || /[\x00-\x1f\x7f]/.test(value)) {
+			throw new Error('Invalid metadata account token');
 		}
+	},
+
+	/** Confirm the old unscoped token's user before assigning it a permanent identity. */
+	async _verifyLegacyCredentialIdentity(scope, apiKey) {
+		let response;
+		try {
+			response = await this._requestPostgreSQLJSON('GET', scope.url + 'keys/current', {
+				headers: { 'Zotero-API-Key': apiKey }, successCodes: [200, 403, 404],
+				timeout: 5000, errorDelayMax: 0
+			});
+		}
+		catch (_) {
+			throw new Error('Cannot verify the legacy account token. It has been preserved; reconnect or log in again.');
+		}
+		if (response.status != 200 || Number(response.json?.userID) !== scope.userID) {
+			throw new Error('Legacy account token identity could not be confirmed. The saved credential was preserved; log in again.');
+		}
+	},
+
+	/** Lazy, verified migration; never return plaintext when OS encryption fails. */
+	async getPostgreSQLAPIKey(options = {}) {
+		const scope = this.getPostgreSQLCredentialScope(options);
+		if (!scope) return null;
+		const context = this.getCredentialContext();
+		return Zotero.CredentialStore.get(this._credentialDescriptor(scope), {
+			guard: () => this.assertCredentialContext(context), validate: this._validateAPIKey,
+			authorizeLegacy: key => this._verifyLegacyCredentialIdentity(scope, key)
+		});
+	},
+
+	async hasPostgreSQLAPIKey(options = {}) {
+		const scope = this.getPostgreSQLCredentialScope(options);
+		if (!scope) return false;
+		const context = this.getCredentialContext();
+		return Zotero.CredentialStore.has(this._credentialDescriptor(scope), () => this.assertCredentialContext(context));
+	},
+
+	/** Login callers pass the authenticated response's user ID, not the old local user. */
+	async setPostgreSQLAPIKey(apiKey, options = {}) {
+		if (apiKey === null || apiKey === undefined || apiKey === '') return this.clearPostgreSQLAPIKey(options);
+		const scope = this.getPostgreSQLCredentialScope(options);
+		if (!scope) throw new Error('Metadata token requires a server URL and authenticated user ID');
+		this._credentialRevision++;
+		const context = this.getCredentialContext();
+		return Zotero.CredentialStore.set(this._credentialDescriptor(scope), apiKey, {
+			guard: () => this.assertCredentialContext(context), validate: this._validateAPIKey
+		});
+	},
+
+	/** Logout is scoped; tokens for other servers/users remain available. */
+	async clearPostgreSQLAPIKey(options = {}) {
+		const scope = this.getPostgreSQLCredentialScope(options);
+		this._credentialRevision++;
+		if (!scope) return;
+		const context = this.getCredentialContext();
+		return Zotero.CredentialStore.remove(this._credentialDescriptor(scope), () => this.assertCredentialContext(context));
 	},
 
 	normalizePostgreSQLBaseURL(url) {
 		url = url.trim();
 		let parsedURL = new URL(url);
+		if (parsedURL.username || parsedURL.password || parsedURL.search || parsedURL.hash) {
+			throw new Error('Metadata server URL cannot contain credentials, a query, or a fragment');
+		}
 		if (!['http:', 'https:'].includes(parsedURL.protocol)) {
 			throw new Error("PostgreSQL metadata server URL must start with http:// or https://");
 		}
@@ -543,7 +632,7 @@ Zotero.Sync.Metadata = {
 		}
 		let reservedLocalPort = `${Zotero.Prefs.get('httpServer.port') || 23119}`;
 		let hostname = parsedURL.hostname.toLowerCase();
-		if ((hostname == 'localhost' || hostname == '127.0.0.1' || hostname == '::1')
+		if ((hostname == 'localhost' || hostname == '127.0.0.1' || hostname == '[::1]')
 				&& parsedURL.port == reservedLocalPort) {
 			throw new Error(
 				`Port ${reservedLocalPort} is reserved for Zotero's local API. `
@@ -557,12 +646,14 @@ Zotero.Sync.Metadata = {
 			parsedURL.hash = '';
 			url = parsedURL.href;
 		}
-		return url.endsWith('/') ? url : url + '/';
+		parsedURL.hostname = host;
+		parsedURL.pathname = parsedURL.pathname.replace(/\/+$/, '') + '/';
+		return parsedURL.href;
 	},
 
 		async _requestPostgreSQLJSON(method, uri, options = {}) {
 			let req = await Zotero.HTTP.request(method, uri, Object.assign({}, options, {
-				responseType: 'text'
+				responseType: 'text', anon: true, followRedirects: false, logBodyLength: 0, debug: false
 		}));
 		let responseText = req.responseText || '';
 		let json;
@@ -570,10 +661,9 @@ Zotero.Sync.Metadata = {
 			json = responseText ? JSON.parse(responseText) : null;
 		}
 		catch (e) {
-			let preview = responseText.replace(/\s+/g, ' ').trim().slice(0, 180);
 			throw new Error(
 				`The PostgreSQL metadata server did not return JSON. `
-				+ `Request: ${uri}. Status: ${req.status}. Response: ${preview}`
+				+ `Request: ${uri}. Status: ${req.status}.`
 			);
 			}
 			return { status: req.status, json };
@@ -581,8 +671,10 @@ Zotero.Sync.Metadata = {
 
 
 		async _getPostgreSQLRequestContext() {
+			const context = this.getCredentialContext();
 			let url = this.getPostgreSQLBaseURL();
-			let apiKey = await this.getPostgreSQLAPIKey();
+			let apiKey = await this.getPostgreSQLAPIKey({ url });
+			this.assertCredentialContext(context);
 			if (!url) {
 				throw new Error("PostgreSQL metadata server URL not set");
 			}
@@ -590,14 +682,5 @@ Zotero.Sync.Metadata = {
 				throw new Error("Log in to the PostgreSQL metadata server first");
 			}
 			return { url, apiKey };
-		},
-
-
-		async _getPostgreSQLLoginInfo() {
-			let logins = await Services.logins.searchLoginsAsync({
-				origin: this._loginManagerHost,
-			httpRealm: this._loginManagerRealm
-		});
-		return logins.find(login => login.username == this._loginManagerUsername) || false;
-	}
+		}
 };

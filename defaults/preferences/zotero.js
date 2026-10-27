@@ -20,6 +20,10 @@ pref("extensions.zotero.debug.store.submitSize",10000000);
 pref("extensions.zotero.debug.store.submitLineLength",10000);
 pref("extensions.zotero.debug.level",5);
 pref("extensions.zotero.automaticScraperUpdates",true);
+// Binary notifications are independent from translator and style updates.
+pref("extensions.zotero.epilib.updates.enabled", true);
+pref("extensions.zotero.epilib.updates.lastAttempt", "0");
+pref("extensions.zotero.epilib.updates.lastNotified", "");
 pref("extensions.zotero.triggerProxyAuthentication", true);
 // Proxy auth URLs should respond successfully to HEAD requests over HTTP and HTTPS (in case of forced HTTPS requests)
 pref("extensions.zotero.proxyAuthenticationURLs", "https://www.acm.org,https://www.ebscohost.com,https://www.sciencedirect.com,https://ieeexplore.ieee.org,https://www.jstor.org,http://www.ovid.com,https://link.springer.com,https://www.tandfonline.com");

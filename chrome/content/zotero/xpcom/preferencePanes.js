@@ -43,7 +43,7 @@ Zotero.PreferencePanes = {
 			src: 'chrome://zotero/content/preferences/preferences_general.xhtml',
 			scripts: ['chrome://zotero/content/preferences/preferences_general.js'],
 			defaultXUL: true,
-			helpURL: 'https://www.zotero.org/support/preferences/general',
+			helpURL: ZOTERO_CONFIG.SUPPORT_URL,
 		},
 		{
 			id: 'zotero-prefpane-account',
@@ -52,7 +52,7 @@ Zotero.PreferencePanes = {
 			src: 'chrome://zotero/content/preferences/preferences_account.xhtml',
 			scripts: ['chrome://zotero/content/preferences/preferences_account.js'],
 			defaultXUL: true,
-			helpURL: 'https://www.zotero.org/support/preferences/sync',
+			helpURL: ZOTERO_CONFIG.SUPPORT_URL,
 		},
 		{
 			id: 'zotero-prefpane-export',
@@ -61,7 +61,7 @@ Zotero.PreferencePanes = {
 			src: 'chrome://zotero/content/preferences/preferences_export.xhtml',
 			scripts: ['chrome://zotero/content/preferences/preferences_export.js'],
 			defaultXUL: true,
-			helpURL: 'https://www.zotero.org/support/preferences/export',
+			helpURL: ZOTERO_CONFIG.SUPPORT_URL,
 		},
 		{
 			id: 'zotero-prefpane-cite',
@@ -70,7 +70,7 @@ Zotero.PreferencePanes = {
 			src: 'chrome://zotero/content/preferences/preferences_cite.xhtml',
 			scripts: ['chrome://zotero/content/preferences/preferences_cite.js'],
 			defaultXUL: true,
-			helpURL: 'https://www.zotero.org/support/preferences/cite',
+			helpURL: ZOTERO_CONFIG.SUPPORT_URL,
 		},
 		{
 			id: 'zotero-prefpane-advanced',
@@ -79,7 +79,7 @@ Zotero.PreferencePanes = {
 			src: 'chrome://zotero/content/preferences/preferences_advanced.xhtml',
 			scripts: ['chrome://zotero/content/preferences/preferences_advanced.js'],
 			defaultXUL: true,
-			helpURL: 'https://www.zotero.org/support/preferences/advanced',
+			helpURL: ZOTERO_CONFIG.SUPPORT_URL,
 		},
 		{
 			id: 'zotero-subpane-reset-sync',
@@ -88,7 +88,7 @@ Zotero.PreferencePanes = {
 			src: 'chrome://zotero/content/preferences/preferences_sync_reset.xhtml',
 			scripts: ['chrome://zotero/content/preferences/preferences_account.js'],
 			defaultXUL: true,
-			helpURL: 'https://www.zotero.org/support/preferences/sync#reset',
+			helpURL: ZOTERO_CONFIG.SUPPORT_URL,
 		}
 	]),
 

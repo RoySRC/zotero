@@ -17,7 +17,14 @@
 
 !define FileMainEXE           "zotero.exe"
 !define WindowClass           "ZoteroMessageWindow"
-!define AppRegName            "Zotero"
+!define AppRegName            "EpiLib"
+
+; Registry aliases isolate installations without renaming zotero.exe or moving
+; existing profiles. The marker identifies packages built for EpiLib, not merely
+; a folder whose name happens to begin with the product name.
+!define InstallerRegistryKey  "Software\EpiLib"
+!define AppPathAlias          "EpiLib.exe"
+!define InstallMarker         "epilib-install.ini"
 
 !define BrandShortName        "EpiLib"
 !define PreReleaseSuffix      ""

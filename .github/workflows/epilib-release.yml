@@ -1,0 +1,166 @@
+name: EpiLib Release
+
+# Tags build drafts. Publishing requires an explicit dispatch and environment review.
+on:
+  push:
+    tags: ['epilib-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable tag (epilib-vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      publish:
+        description: Publish after validation (otherwise create a draft)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+concurrency:
+  group: epilib-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    if: github.repository == 'epilib-org/epilib-desktop'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Validate immutable release identity
+        id: identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { parseVersion } from './resource/epilibUpdates.mjs';
+          const tag = process.env.RELEASE_TAG;
+          if (!tag.startsWith('epilib-v')) throw new Error('Not an EpiLib release tag');
+          const version = tag.slice(8);
+          parseVersion(version);
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const commit = git('rev-parse', 'HEAD');
+          if (git('rev-parse', '--verify', `refs/tags/${tag}^{commit}`) !== commit) throw new Error('Tag mismatch');
+          git('merge-base', '--is-ancestor', commit, 'origin/main');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ncommit=${commit}\ntag=${tag}\n`);
+          JS
+
+  validate:
+    needs: identity
+    uses: ./.github/workflows/epilib-branding.yml
+    with:
+      ref: ${{ needs.identity.outputs.commit }}
+
+  build:
+    needs: [identity, validate]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, platform: mac-universal }
+          - { os: ubuntu-24.04, platform: linux-x64 }
+          - { os: ubuntu-24.04, platform: linux-arm64 }
+          - { os: ubuntu-24.04, platform: windows-x64 }
+          - { os: ubuntu-24.04, platform: windows-arm64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.identity.outputs.commit }}
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Build dependencies (Linux and Windows cross-packages)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin zstd zip xz-utils
+      - name: Build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install librsvg zstd
+      - name: Assemble and inspect release package
+        env:
+          NODE_OPTIONS: --openssl-legacy-provider
+          VERSION: ${{ needs.identity.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          npm ci
+          npm run build
+          node tools/updates/release.mjs build "$VERSION" "$PLATFORM" release-artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: epilib-release-${{ matrix.platform }}
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: [identity, validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Configure required reviewers on this environment before enabling publication.
+    environment: epilib-release
+    # Serialize publication across versions so an older concurrent build cannot
+    # race the preflight and replace a newer release as "latest".
+    concurrency:
+      group: epilib-release-publication
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.identity.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: epilib-release-*
+          merge-multiple: true
+          path: release-artifacts
+      - name: Seal feed and checksums
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+          COMMIT: ${{ needs.identity.outputs.commit }}
+        run: |
+          node tools/updates/release.mjs manifest release-artifacts "$VERSION" "$COMMIT"
+          node tools/updates/release.mjs verify release-artifacts
+      - name: Upload draft, then optionally publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.identity.outputs.tag }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          COMMIT: ${{ needs.identity.outputs.commit }}
+          PUBLISH: ${{ inputs.publish == true }}
+        run: |
+          node tools/updates/release.mjs preflight "$VERSION"
+          test "$(gh api "repos/epilib-org/epilib-desktop/commits/$TAG" --jq .sha)" = "$COMMIT"
+          # No clobber: existing releases/drafts require maintainer review, not replacement.
+          gh release create "$TAG" release-artifacts/* --repo epilib-org/epilib-desktop \
+            --verify-tag --draft --title "EpiLib $VERSION" --notes-file tools/updates/RELEASE-NOTES.md
+          if [[ "$PUBLISH" == true ]]; then
+            test "$(gh api repos/epilib-org/epilib-desktop --jq .visibility)" = public || {
+              echo 'The anonymous desktop update feed requires a public release repository; draft preserved.' >&2
+              exit 1
+            }
+            gh release edit "$TAG" --repo epilib-org/epilib-desktop --draft=false --latest
+          fi

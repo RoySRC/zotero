@@ -12,6 +12,19 @@ describe('Recognition provider credentials', function () {
 
 	beforeEach(function () {
 		sandbox = sinon.createSandbox();
+		// Exercise the real login database without platform keychain prompts in CI.
+		// Failure modes and native encryption have separate apiCredentials coverage.
+		const ciphertexts = new Map();
+		sandbox.stub(Zotero.OSKeyStore, 'encrypt').callsFake(async plaintext => {
+			const ciphertext = 'oskv1:test-' + Zotero.Utilities.randomString();
+			ciphertexts.set(ciphertext, plaintext);
+			return ciphertext;
+		});
+		sandbox.stub(Zotero.OSKeyStore, 'decrypt').callsFake(async ciphertext => {
+			if (!Zotero.OSKeyStore.isEncrypted(ciphertext)) return ciphertext;
+			if (!ciphertexts.has(ciphertext)) throw new Error('Unknown synthetic ciphertext');
+			return ciphertexts.get(ciphertext);
+		});
 		saved = names.map(name => [name, Zotero.Prefs.get(name)]);
 		scopes = [];
 		Zotero.Prefs.set('recognize.engine', 'epilib');
@@ -29,8 +42,10 @@ describe('Recognition provider credentials', function () {
 		sandbox.restore();
 		for (let scope of scopes) {
 			let realm = 'EpiLib PDF provider credentials: ' + JSON.stringify([scope.baseURL, scope.userID]);
-			for (let login of await Services.logins.searchLoginsAsync({ origin: 'chrome://zotero', httpRealm: realm })) {
-				await Services.logins.removeLoginAsync(login);
+			for (const httpRealm of [realm, realm + ' [OSKeyStore v1]']) {
+				for (let login of await Services.logins.searchLoginsAsync({ origin: 'chrome://zotero', httpRealm })) {
+					await Services.logins.removeLoginAsync(login);
+				}
 			}
 		}
 		for (let [name, value] of saved) {

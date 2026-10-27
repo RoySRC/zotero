@@ -59,9 +59,9 @@ recognition-review-tags = Tags
 recognition-cancelled = PDF recognition was cancelled.
 recognition-refresh-published = Update to Published Version...
 recognition-refresh-metadata = Refresh Metadata...
-recognition-refresh-unavailable = Select an editable preprint or publication with a DOI and enable EpiLib PDF recognition first.
+recognition-refresh-unavailable = Select an editable bibliographic item and enable EpiLib PDF recognition first. Updating to a published version requires a preprint.
 recognition-refresh-no-publication = No verified publication metadata was found. The existing item was not changed.
-recognition-refresh-changed = This item changed while looking up its published version. Please try again.
+recognition-refresh-changed = This item changed while looking up its metadata. Please try again.
 
 preferences-file-renaming-title = File Renaming
 preferences-file-renaming-intro =

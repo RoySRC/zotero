@@ -6,24 +6,24 @@
   ${CreateShortcutsLog}
 
   ; Remove registry entries for non-existent apps and for apps that point to our
-  ; install location in the Software\Zotero key and uninstall registry entries
+  ; install location in the ${InstallerRegistryKey} key and uninstall registry entries
   ; that point to our install location for both HKCU and HKLM.
   SetShellVarContext current  ; Set SHCTX to the current user (e.g. HKCU)
-  ${RegCleanMain} "Software\Zotero"
+  ${RegCleanMain} "${InstallerRegistryKey}"
   ${RegCleanUninstall}
   ${UpdateProtocolHandlers}
   ; Win7 taskbar and start menu link maintenance
   Call FixShortcutAppModelIDs
 
   ClearErrors
-  WriteRegStr HKLM "Software\Zotero" "${BrandShortName}InstallerTest" "Write Test"
+  WriteRegStr HKLM "${InstallerRegistryKey}" "${BrandShortName}InstallerTest" "Write Test"
   ${If} ${Errors}
     StrCpy $TmpVal "HKCU" ; used primarily for logging
   ${Else}
     SetShellVarContext all    ; Set SHCTX to all users (e.g. HKLM)
-    DeleteRegValue HKLM "Software\Zotero" "${BrandShortName}InstallerTest"
+    DeleteRegValue HKLM "${InstallerRegistryKey}" "${BrandShortName}InstallerTest"
     StrCpy $TmpVal "HKLM" ; used primarily for logging
-    ${RegCleanMain} "Software\Zotero"
+    ${RegCleanMain} "${InstallerRegistryKey}"
     ${RegCleanUninstall}
     ${UpdateProtocolHandlers}
     ${SetAppLSPCategories} ${LSP_CATEGORIES}
@@ -31,9 +31,9 @@
     ; Win7 taskbar and start menu link maintenance
     Call FixShortcutAppModelIDs
 
-    ReadRegStr $0 HKLM "Software\zotero.org\Zotero" "CurrentVersion"
+    ReadRegStr $0 HKLM "${InstallerRegistryKey}\Runtime" "CurrentVersion"
     ${If} "$0" != "${GREVersion}"
-      WriteRegStr HKLM "Software\zotero.org\Zotero" "CurrentVersion" "${GREVersion}"
+      WriteRegStr HKLM "${InstallerRegistryKey}\Runtime" "CurrentVersion" "${GREVersion}"
     ${EndIf}
   ${EndIf}
 
@@ -43,114 +43,120 @@
 !macroend
 !define PostUpdate "!insertmacro PostUpdate"
 
-; Adds zotero:// protocol handler and makes Zotero open exported bib files
+; Keep the compatible zotero:// scheme, but never take it or an existing file
+; association away from another application. EpiLib owns only its own ProgIDs.
 !macro SetHandlers
   Push "$INSTDIR\${FileMainEXE}"
   Call GetLongPath
   Pop $8
   
-  ${AddHandlerValues} "Software\Classes\zotero" "$\"$8$\" -url $\"%1$\"" \
-      "$8,1" "Zotero Protocol" "true" ""
+  ReadRegStr $6 HKCR "zotero\shell\open\command" ""
+  ${IsHandlerForInstallDir} "zotero" $R9
+  ${If} $6 == ""
+  ${OrIf} $R9 == "true"
+    ${AddHandlerValues} "Software\Classes\zotero" "$\"$8$\" -url $\"%1$\"" \
+        "$8,1" "EpiLib Protocol" "true" ""
+  ${EndIf}
   
   ; Add handlers for reference formats
-  ${AddHandlerValues} "Software\Classes\ZoteroRIS" "$\"$8$\" -file $\"%1$\"" \
+  ${AddHandlerValues} "Software\Classes\EpiLibRIS" "$\"$8$\" -file $\"%1$\"" \
       "$8,1" "Research Information Systems Document" "" ""
   
-  ${AddHandlerValues} "Software\Classes\ZoteroISI" "$\"$8$\" -file $\"%1$\"" \
+  ${AddHandlerValues} "Software\Classes\EpiLibISI" "$\"$8$\" -file $\"%1$\"" \
       "$8,1" "ISI Common Export Format Document" "" ""
   
-  ${AddHandlerValues} "Software\Classes\ZoteroMODS" "$\"$8$\" -file $\"%1$\"" \
+  ${AddHandlerValues} "Software\Classes\EpiLibMODS" "$\"$8$\" -file $\"%1$\"" \
       "$8,1" "Metadata Object Description Schema Document" "" ""
   
-  ${AddHandlerValues} "Software\Classes\ZoteroRDF" "$\"$8$\" -file $\"%1$\"" \
+  ${AddHandlerValues} "Software\Classes\EpiLibRDF" "$\"$8$\" -file $\"%1$\"" \
       "$8,1" "Resource Description Framework Document" "" ""
   
-  ${AddHandlerValues} "Software\Classes\ZoteroBibTeX" "$\"$8$\" -file $\"%1$\"" \
+  ${AddHandlerValues} "Software\Classes\EpiLibBibTeX" "$\"$8$\" -file $\"%1$\"" \
       "$8,1" "BibTeX Document" "" ""
   
-  ${AddHandlerValues} "Software\Classes\ZoteroMARC" "$\"$8$\" -file $\"%1$\"" \
+  ${AddHandlerValues} "Software\Classes\EpiLibMARC" "$\"$8$\" -file $\"%1$\"" \
       "$8,1" "MARC Document" "" ""
   
-  ${AddHandlerValues} "Software\Classes\ZoteroCSL" "$\"$8$\" -file $\"%1$\"" \
+  ${AddHandlerValues} "Software\Classes\EpiLibCSL" "$\"$8$\" -file $\"%1$\"" \
       "$8,1" "CSL Citation Style" "" ""
   
   ; Associate file handlers
-  ReadRegStr $6 SHCTX "Software\Classes\.ris" ""
-  ${If} "$6" != "ZoteroRIS"
-    WriteRegStr SHCTX "Software\Classes\.ris"   "" "ZoteroRIS"
+  ReadRegStr $6 HKCR ".ris" ""
+  ${If} "$6" == ""
+    WriteRegStr SHCTX "Software\Classes\.ris"   "" "EpiLibRIS"
     WriteRegStr SHCTX "Software\Classes\.ris"   "Content Type" "application/x-research-info-systems"
   ${EndIf}
   
-  ReadRegStr $6 SHCTX "Software\Classes\.mods" ""
-  ${If} "$6" != "ZoteroMODS"
-    WriteRegStr SHCTX "Software\Classes\.mods"  "" "ZoteroMODS"
+  ReadRegStr $6 HKCR ".mods" ""
+  ${If} "$6" == ""
+    WriteRegStr SHCTX "Software\Classes\.mods"  "" "EpiLibMODS"
     WriteRegStr SHCTX "Software\Classes\.mods"   "Content Type" "application/mods+xml"
   ${EndIf}
   
-  ReadRegStr $6 SHCTX "Software\Classes\.isi" ""
-  ${If} "$6" != "ZoteroMODS"
-    WriteRegStr SHCTX "Software\Classes\.isi"  "" "ZoteroISI"
+  ReadRegStr $6 HKCR ".isi" ""
+  ${If} "$6" == ""
+    WriteRegStr SHCTX "Software\Classes\.isi"  "" "EpiLibISI"
     WriteRegStr SHCTX "Software\Classes\.isi"   "Content Type" "application/x-inst-for-Scientific-info"
   ${EndIf}
   
-  ReadRegStr $6 SHCTX "Software\Classes\.rdf" ""
-  ${If} "$6" != "ZoteroRDF"
-    WriteRegStr SHCTX "Software\Classes\.rdf"  "" "ZoteroRDF"
+  ReadRegStr $6 HKCR ".rdf" ""
+  ${If} "$6" == ""
+    WriteRegStr SHCTX "Software\Classes\.rdf"  "" "EpiLibRDF"
     WriteRegStr SHCTX "Software\Classes\.rdf"   "Content Type" "application/rdf+xml"
   ${EndIf}
   
-  ReadRegStr $6 SHCTX "Software\Classes\.bib" ""
-  ${If} "$6" != "ZoteroBibTeX"
-    WriteRegStr SHCTX "Software\Classes\.bib"  "" "ZoteroBibTeX"
+  ReadRegStr $6 HKCR ".bib" ""
+  ${If} "$6" == ""
+    WriteRegStr SHCTX "Software\Classes\.bib"  "" "EpiLibBibTeX"
     WriteRegStr SHCTX "Software\Classes\.bib"   "Content Type" "application/x-bibtex"
   ${EndIf}
   
-  ReadRegStr $6 SHCTX "Software\Classes\.bibtex" ""
-  ${If} "$6" != "ZoteroMARC"
-    WriteRegStr SHCTX "Software\Classes\.bibtex"  "" "ZoteroBibTeX"
+  ReadRegStr $6 HKCR ".bibtex" ""
+  ${If} "$6" == ""
+    WriteRegStr SHCTX "Software\Classes\.bibtex"  "" "EpiLibBibTeX"
     WriteRegStr SHCTX "Software\Classes\.bibtex"   "Content Type" "application/x-bibtex"
   ${EndIf}
   
-  ReadRegStr $6 SHCTX "Software\Classes\.marc" ""
-  ${If} "$6" != "ZoteroMARC"
-    WriteRegStr SHCTX "Software\Classes\.marc"  "" "ZoteroMARC"
+  ReadRegStr $6 HKCR ".marc" ""
+  ${If} "$6" == ""
+    WriteRegStr SHCTX "Software\Classes\.marc"  "" "EpiLibMARC"
     WriteRegStr SHCTX "Software\Classes\.marc"   "Content Type" "application/marc"
   ${EndIf}
   
-  ReadRegStr $6 SHCTX "Software\Classes\.csl" ""
-  ${If} "$6" != "ZoteroCSL"
-    WriteRegStr SHCTX "Software\Classes\.csl"  "" "ZoteroCSL"
+  ReadRegStr $6 HKCR ".csl" ""
+  ${If} "$6" == ""
+    WriteRegStr SHCTX "Software\Classes\.csl"  "" "EpiLibCSL"
     WriteRegStr SHCTX "Software\Classes\.csl"   "Content Type" "application/vnd.citationstyles.style+xml"
   ${EndIf}
 !macroend
 !define SetHandlers "!insertmacro SetHandlers"
 
-; Add Software\Zotero\ registry entries (uses SHCTX).
+; Add ${InstallerRegistryKey}\ registry entries (uses SHCTX).
 !macro SetAppKeys
   Push $INSTDIR
   Call GetLongPath
   Pop $8
-  StrCpy $0 "Software\Zotero\${BrandFullNameInternal}\${AppVersion} (${AB_CD})\Main"
+  StrCpy $0 "${InstallerRegistryKey}\${BrandFullNameInternal}\${AppVersion} (${AB_CD})\Main"
   ${WriteRegStr2} $TmpVal "$0" "Install Directory" "$8" 0
   ${WriteRegStr2} $TmpVal "$0" "PathToExe" "$8\${FileMainEXE}" 0
 
-  StrCpy $0 "Software\Zotero\${BrandFullNameInternal}\${AppVersion} (${AB_CD})\Uninstall"
+  StrCpy $0 "${InstallerRegistryKey}\${BrandFullNameInternal}\${AppVersion} (${AB_CD})\Uninstall"
   ${WriteRegStr2} $TmpVal "$0" "Description" "${BrandFullNameInternal} ${AppVersion} (${ARCH} ${AB_CD})" 0
 
-  StrCpy $0 "Software\Zotero\${BrandFullNameInternal}\${AppVersion} (${AB_CD})"
+  StrCpy $0 "${InstallerRegistryKey}\${BrandFullNameInternal}\${AppVersion} (${AB_CD})"
   ${WriteRegStr2} $TmpVal  "$0" "" "${AppVersion} (${AB_CD})" 0
 
-  StrCpy $0 "Software\Zotero\${BrandFullNameInternal} ${AppVersion}\bin"
+  StrCpy $0 "${InstallerRegistryKey}\${BrandFullNameInternal} ${AppVersion}\bin"
   ${WriteRegStr2} $TmpVal "$0" "PathToExe" "$8\${FileMainEXE}" 0
 
-  StrCpy $0 "Software\Zotero\${BrandFullNameInternal} ${AppVersion}\extensions"
+  StrCpy $0 "${InstallerRegistryKey}\${BrandFullNameInternal} ${AppVersion}\extensions"
   ${WriteRegStr2} $TmpVal "$0" "Components" "$8\components" 0
   ${WriteRegStr2} $TmpVal "$0" "Plugins" "$8\plugins" 0
 
-  StrCpy $0 "Software\Zotero\${BrandFullNameInternal} ${AppVersion}"
+  StrCpy $0 "${InstallerRegistryKey}\${BrandFullNameInternal} ${AppVersion}"
   ${WriteRegStr2} $TmpVal "$0" "GeckoVer" "${GREVersion}" 0
 
-  StrCpy $0 "Software\Zotero\${BrandFullNameInternal}"
+  StrCpy $0 "${InstallerRegistryKey}\${BrandFullNameInternal}"
   ${WriteRegStr2} $TmpVal "$0" "" "${GREVersion}" 0
   ${WriteRegStr2} $TmpVal "$0" "CurrentVersion" "${AppVersion} (${AB_CD})" 0
 !macroend
@@ -193,7 +199,7 @@
     ${WriteRegStr2} $1 "$0" "DisplayName" "${BrandFullNameInternal}" 0
     ${WriteRegStr2} $1 "$0" "DisplayVersion" "${AppVersion}" 0
     ${WriteRegStr2} $1 "$0" "InstallLocation" "$8" 0
-    ${WriteRegStr2} $1 "$0" "Publisher" "Corporation for Digital Scholarship" 0
+    ${WriteRegStr2} $1 "$0" "Publisher" "${CompanyName}" 0
     ${WriteRegStr2} $1 "$0" "UninstallString" "$8\uninstall\helper.exe" 0
     ${WriteRegStr2} $1 "$0" "URLInfoAbout" "${URLInfoAbout}" 0
     ${WriteRegStr2} $1 "$0" "URLUpdateInfo" "${URLUpdateInfo}" 0
@@ -255,7 +261,7 @@
   ${IsHandlerForInstallDir} "zotero" $R9
   ${If} "$R9" == "true"
      ${AddHandlerValues} "SOFTWARE\Classes\zotero" "$\"$8$\" -url $\"%1$\"" \
-	     "$8,1" "Zotero" "true" ""
+	     "$8,1" "EpiLib Protocol" "true" ""
   ${EndIf}
 !macroend
 !define UpdateProtocolHandlers "!insertmacro UpdateProtocolHandlers"

@@ -1,5 +1,5 @@
 /* global describe, beforeEach, afterEach, it, assert, sinon, getPromiseError,
-	loadPrefPane, importPDFAttachment, createDataObject, createAnnotation, loadZoteroPane */
+	loadPrefPane, importPDFAttachment, createDataObject, createAnnotation, loadZoteroPane, waitForWindow, waitForDOMEvent */
 "use strict";
 
 describe('PDF recognition engines', function () {
@@ -9,6 +9,13 @@ describe('PDF recognition engines', function () {
 		'recognize.grobid.enabled', 'recognize.grobid.url', 'automaticTags'];
 	const server = 'https://metadata.example.test/api/';
 	const payload = { metadata: {}, totalPages: 1, pages: [[600, 800, []]], fileName: 'test.pdf' };
+
+	/** Invoke the actual XUL handler; chrome ignores untrusted synthetic commands. */
+	function invokeItemCommand(win, selector) {
+		let command = win.document.querySelector(selector);
+		assert.isFunction(command.oncommand);
+		command.oncommand();
+	}
 
 	beforeEach(function () {
 		saved = prefs.map(name => [name, Zotero.Prefs.get(name)]);
@@ -453,7 +460,7 @@ describe('PDF recognition engines', function () {
 		}) });
 		sandbox.stub(recognizer, 'chooseRecognitionCandidate').callsFake(candidates => candidates[0].item);
 		try {
-			assert.isTrue(await recognizer.refreshPublishedMetadata(parent));
+			assert.isTrue(await recognizer.refreshMetadata(parent));
 			assert.equal(parent.key, key);
 			assert.equal(parent.getCreators()[0].lastName, 'Nicolas Boull\u00e9');
 			assert.equal(parent.getCreators()[1].lastName, 'Alex Townsend');
@@ -466,10 +473,10 @@ describe('PDF recognition engines', function () {
 			assert.equal(JSON.parse(request.firstCall.args[2].body).metadata.DOI, record.DOI);
 			parent.setField('citationKey', '');
 			await parent.saveTx();
-			await recognizer.refreshPublishedMetadata(parent);
+			await recognizer.refreshMetadata(parent);
 			let generated = parent.getField('citationKey');
 			assert.match(generated, /^boulle2024mathematicalguideoperator-/);
-			await recognizer.refreshPublishedMetadata(parent);
+			await recognizer.refreshMetadata(parent);
 			assert.equal(parent.getField('citationKey'), generated);
 		}
 		finally { await parent.eraseTx(); }
@@ -484,12 +491,12 @@ describe('PDF recognition engines', function () {
 		let query = sandbox.stub(recognizer, 'queryPDFMetadata').resolves({ status: 'matched', item: record });
 		let choice = sandbox.stub(recognizer, 'chooseRecognitionCandidate').returns(null);
 		try {
-			assert.include((await getPromiseError(recognizer.refreshPublishedMetadata(parent))).message, 'No verified');
+			assert.include((await getPromiseError(recognizer.refreshMetadata(parent))).message, 'No verified');
 			query.resolves({ status: 'matched', item: { ...record, itemType: 'preprint', DOI: '10.1234/published' } });
-			assert.include((await getPromiseError(recognizer.refreshPublishedMetadata(parent))).message, 'No verified');
+			assert.include((await getPromiseError(recognizer.refreshMetadata(parent))).message, 'No verified');
 			assert.isFalse(choice.called);
 			query.resolves({ status: 'matched', item: { ...record, DOI: '10.1234/published' } });
-			assert.isFalse(await recognizer.refreshPublishedMetadata(parent));
+			assert.isFalse(await recognizer.refreshMetadata(parent));
 			assert.deepEqual(parent.toJSON(), before);
 		}
 		finally { await parent.eraseTx(); }
@@ -544,7 +551,7 @@ describe('PDF recognition engines', function () {
 			return record;
 		});
 		try {
-			await recognizer.refreshPublishedMetadata(parent);
+			await recognizer.refreshMetadata(parent);
 			assert.isTrue(query.firstCall.args[0].includeAlternatives);
 			assert.equal(parent.getField('title'), record.title);
 			assert.equal(parent.getField('citationKey'), 'UserCitationKey');
@@ -611,6 +618,47 @@ describe('PDF recognition engines', function () {
 		finally { await parent.eraseTx(); await collection.eraseTx(); }
 	});
 
+	it('keeps the Neuro-Symbolic paper title and collection when publication refresh produces a sync patch', async function () {
+		const title = 'Neuro-Symbolic AI for Analytical Solutions of Differential Equations';
+		let collection = await createDataObject('collection');
+		let parent = await createDataObject('item', { itemType: 'preprint', title,
+			version: 1, collections: [collection.id], tags: [{ tag: 'Personal tag' }] });
+		parent.setField('archiveID', '2502.01476');
+		parent.setField('DOI', '10.48550/arXiv.2502.01476');
+		parent.setField('abstractNote', 'Preserve the original abstract');
+		parent.setField('citationKey', 'Oikonomou2025NeuroSymbolic');
+		await parent.saveTx();
+		let original = parent.toJSON();
+		await Zotero.Sync.Data.Local.saveCacheObjects('item', parent.libraryID, [original]);
+		let record = { itemType: 'conferencePaper', title,
+			creators: [{ creatorType: 'author', name: 'Orestis Oikonomou' }],
+			date: '2026', proceedingsTitle: 'ICML 2026 regular',
+			url: 'https://openreview.net/forum?id=acvRKe2uMW' };
+		sandbox.stub(recognizer, 'queryPDFMetadata').resolves({ status: 'matched', item: record });
+		sandbox.stub(recognizer, 'chooseRecognitionCandidate').returns(record);
+		try {
+			assert.isTrue(await recognizer.refreshPublishedMetadata(parent));
+			await parent.reload(null, true);
+			assert.equal(parent.getField('title'), title);
+			assert.deepEqual(parent.getCollections(), [collection.id]);
+			let engine = new Zotero.Sync.Data.Engine({ apiClient: {}, libraryID: parent.libraryID });
+			let patch = await engine._getJSONForObject('item', parent.id);
+			assert.equal(patch.itemType, 'conferencePaper');
+			// This is the legitimate wire format that previously triggered data loss:
+			// a changed type does not make unchanged title/collections part of the patch.
+			for (let field of ['title', 'collections', 'citationKey', 'abstractNote', 'tags']) {
+				assert.notProperty(patch, field);
+			}
+			assert.equal(patch.archiveID, '', 'Removed preprint-only fields are explicit clears');
+			assert.equal(patch.DOI, '');
+			assert.equal(parent.getField('citationKey'), original.citationKey);
+			assert.equal(parent.getField('abstractNote'), original.abstractNote);
+			assert.deepEqual(parent.getCollections(), [collection.id]);
+			assert.deepEqual(parent.getTags(), original.tags);
+		}
+		finally { await parent.eraseTx(); await collection.eraseTx(); }
+	});
+
 	it('cancel, no publication, read-only libraries and concurrent edits never overwrite an existing preprint', async function () {
 		let parent = await createDataObject('item', { itemType: 'preprint', title: 'Original title' });
 		let before = parent.toJSON();
@@ -625,7 +673,7 @@ describe('PDF recognition engines', function () {
 			assert.deepEqual(parent.toJSON(), before);
 			let editable = sandbox.stub(parent, 'isEditable').returns(false);
 			assert.isFalse(recognizer.canRefreshPublishedMetadata(parent));
-			assert.include((await getPromiseError(recognizer.refreshPublishedMetadata(parent))).message, 'editable preprint');
+			assert.include((await getPromiseError(recognizer.refreshPublishedMetadata(parent))).message, 'editable bibliographic item');
 			editable.restore();
 			query.callsFake(async () => {
 				parent.setField('title', 'Concurrent user edit');
@@ -640,26 +688,201 @@ describe('PDF recognition engines', function () {
 		finally { await parent.eraseTx(); }
 	});
 
-	it('shows the published-version action only for an editable preprint with EpiLib enabled', async function () {
+	it('keeps refresh and publication upgrade as separate context-menu commands', async function () {
 		let win = await loadZoteroPane();
 		let parent = await createDataObject('item', { itemType: 'preprint', title: 'Refresh test' });
 		try {
 			await win.ZoteroPane.selectItem(parent.id);
 			await win.ZoteroPane.buildItemContextMenu();
-			let menu = win.document.querySelector('.zotero-menuitem-refresh-publication');
-			assert.isFalse(menu.hidden);
-			assert.equal(menu.label, 'Update to Published Version...');
+			let upgrade = win.document.querySelector('.zotero-menuitem-refresh-publication');
+			let refresh = win.document.querySelector('.zotero-menuitem-refresh-metadata');
+			assert.isNotNull(refresh, 'Refresh must not be replaced by the publication command');
+			assert.isFalse(refresh.hidden);
+			assert.equal(refresh.label, 'Refresh Metadata...');
+			assert.isFalse(upgrade.hidden);
+			assert.equal(upgrade.label, 'Update to Published Version...');
+			// Check the compiled theme and packaged assets, not just menu classes:
+			// native and in-content menus use separate icon CSS properties.
+			let popup = win.document.getElementById('zotero-itemmenu');
+			let shown = waitForDOMEvent(popup, 'popupshown');
+			popup.openPopup(win.document.getElementById('zotero-items-tree'), 'after_start', 0, 0, true);
+			await shown; // Gecko resolves popup styles lazily, only once the menu opens.
+			try {
+				let referenceStyle = win.getComputedStyle(win.document.querySelector('.zotero-menuitem-duplicate-item'));
+				for (let [command, icon] of [[refresh, 'refresh'], [upgrade, 'retrieve-metadata']]) {
+					let url = `chrome://zotero/skin/16/universal/${icon}.svg`;
+					let style = win.getComputedStyle(command);
+					assert.include(style.getPropertyValue('--menuitem-icon'), url);
+					if (referenceStyle.listStyleImage != 'none') assert.include(style.listStyleImage, url);
+					assert.equal(style.fill, referenceStyle.fill, 'Use the standard theme-aware menu color');
+					let image = new win.Image();
+					image.src = url;
+					await image.decode();
+					assert.equal(image.naturalWidth, 16);
+					assert.equal(image.naturalHeight, 16);
+				}
+			}
+			finally { popup.hidePopup(); }
+			let refreshCall = sandbox.stub(recognizer, 'refreshMetadata').resolves(true);
+			let upgradeCall = sandbox.stub(recognizer, 'refreshPublishedMetadata').resolves(true);
+			invokeItemCommand(win, '.zotero-menuitem-refresh-metadata');
+			assert.equal(refreshCall.callCount, 1, 'Refresh menu must invoke refresh');
+			assert.equal(refreshCall.firstCall.args[0].id, parent.id);
+			assert.isFalse(upgradeCall.called);
+			invokeItemCommand(win, '.zotero-menuitem-refresh-publication');
+			assert.equal(upgradeCall.callCount, 1, 'Publication menu must invoke upgrade');
+			assert.equal(upgradeCall.firstCall.args[0].id, parent.id);
+			assert.isTrue(refreshCall.calledOnce);
+
+			// DOI-less publications, including upgraded OpenReview records, must
+			// retain refresh. Upgrading is meaningful only while still a preprint.
+			parent.setType(Zotero.ItemTypes.getID('conferencePaper'));
+			await parent.saveTx();
+			await win.ZoteroPane.buildItemContextMenu();
+			assert.isFalse(refresh.hidden);
+			assert.isTrue(upgrade.hidden);
 			parent.setType(Zotero.ItemTypes.getID('bookSection'));
 			parent.setField('DOI', '10.1016/bs.hna.2024.05.003');
 			await parent.saveTx();
 			await win.ZoteroPane.buildItemContextMenu();
-			assert.isFalse(menu.hidden);
-			assert.equal(menu.label, 'Refresh Metadata...');
+			assert.isFalse(refresh.hidden);
+			assert.isTrue(upgrade.hidden);
 			Zotero.Prefs.set('recognize.engine', 'zotero');
 			await win.ZoteroPane.buildItemContextMenu();
-			assert.isTrue(menu.hidden);
+			assert.isTrue(refresh.hidden);
+			assert.isTrue(upgrade.hidden);
 		}
 		finally { await parent.eraseTx(); win.close(); }
+	});
+
+	it('hides both metadata commands for noneditable, deleted, attachment and multiple selections', async function () {
+		let win = await loadZoteroPane();
+		let parent = await createDataObject('item', { itemType: 'preprint', title: 'Refresh restrictions' });
+		let pdf = await importPDFAttachment(parent);
+		try {
+			await win.ZoteroPane.selectItem(parent.id);
+			let editable = sandbox.stub(parent, 'isEditable').returns(false);
+			await win.ZoteroPane.buildItemContextMenu();
+			let upgrade = win.document.querySelector('.zotero-menuitem-refresh-publication');
+			let refresh = win.document.querySelector('.zotero-menuitem-refresh-metadata');
+			assert.isTrue(refresh.hidden);
+			assert.isTrue(upgrade.hidden);
+			editable.restore();
+			parent.deleted = true;
+			await parent.saveTx();
+			assert.isFalse(recognizer.canRefreshMetadata(parent));
+			assert.isFalse(recognizer.canRefreshPublishedMetadata(parent));
+			parent.deleted = false;
+			await parent.saveTx();
+			await win.ZoteroPane.selectItem(pdf.id);
+			await win.ZoteroPane.buildItemContextMenu();
+			assert.isTrue(refresh.hidden);
+			assert.isTrue(upgrade.hidden);
+			await win.ZoteroPane.selectItems([parent.id, pdf.id]);
+			await win.ZoteroPane.buildItemContextMenu();
+			assert.isTrue(refresh.hidden);
+			assert.isTrue(upgrade.hidden);
+		}
+		finally { await parent.eraseTx(); win.close(); }
+	});
+
+	it('refreshes a preprint without upgrading it even when the preferred recognition result is published', async function () {
+		let parent = await createDataObject('item', { itemType: 'preprint', title: 'Keep this preprint title' });
+		parent.setField('archiveID', '2502.01476');
+		await parent.saveTx();
+		let source = { itemType: 'preprint', title: 'Catalog title', creators: [], abstractNote: 'New abstract' };
+		let published = { itemType: 'conferencePaper', title: source.title, creators: [], proceedingsTitle: 'Conference' };
+		let query = sandbox.stub(recognizer, 'queryPDFMetadata').resolves({ status: 'matched', item: published,
+			review: { sources: [{ id: 'preprint', label: 'arXiv', item: source, mergeFields: [] }],
+				custom: { item: published, fieldSources: {} }, providers: [] } });
+		sandbox.stub(recognizer, 'chooseRecognitionCandidate').callsFake((candidates, options) => {
+			assert.deepEqual(options.allowedTypes, ['preprint']);
+			assert.isTrue(candidates.every(candidate => candidate.item.itemType == 'preprint'));
+			return source;
+		});
+		try {
+			assert.isTrue(await recognizer.refreshMetadata(parent));
+			await parent.reload(null, true);
+			assert.equal(parent.itemTypeID, Zotero.ItemTypes.getID('preprint'));
+			assert.equal(parent.getField('title'), 'Keep this preprint title');
+			assert.equal(parent.getField('abstractNote'), 'New abstract');
+			assert.equal(parent.getField('archiveID'), '2502.01476');
+			assert.equal(query.firstCall.args[0].metadata.arxiv, '2502.01476');
+		}
+		finally { await parent.eraseTx(); }
+	});
+
+	it('runs DOI-less refresh from the native menu through review and SQLite without moving the PDF', async function () {
+		let win = await loadZoteroPane();
+		let collection = await createDataObject('collection');
+		let parent = await createDataObject('item', { itemType: 'conferencePaper', title: 'A paper without a DOI',
+			collections: [collection.id], tags: [{ tag: 'Personal tag' }] });
+		parent.setField('citationKey', 'KeepMyKey');
+		await parent.saveTx();
+		let pdf = await importPDFAttachment(parent);
+		let original = parent.toJSON(), originalPDF = pdf.toJSON();
+		let record = { itemType: 'conferencePaper', title: 'Provider title', creators: [], pages: '1-12' };
+		let query = sandbox.stub(recognizer, 'queryPDFMetadata').resolves({ status: 'matched', item: record });
+		let refreshCall = sandbox.spy(recognizer, 'refreshMetadata');
+		try {
+			await win.ZoteroPane.selectItem(parent.id);
+			await win.ZoteroPane.buildItemContextMenu();
+			// Only the catalog result is stubbed. This opens the actual native review
+			// dialog, accepts its default fill-blanks behavior, then reloads SQLite.
+			let opened = waitForWindow('chrome://zotero/content/recognitionReview.xhtml', dialog => {
+				try {
+					assert.isFalse(dialog.document.getElementById('recognition-review-replace').checked);
+					dialog.document.getElementById('recognition-review-dialog').acceptDialog();
+				}
+				finally { if (!dialog.closed) dialog.close(); }
+			});
+			invokeItemCommand(win, '.zotero-menuitem-refresh-metadata');
+			assert.isTrue(refreshCall.calledOnce);
+			assert.isTrue(await refreshCall.firstCall.returnValue);
+			await opened;
+			await parent.reload(null, true);
+			await pdf.reload(null, true);
+			assert.equal(query.firstCall.args[0].metadata.Title, original.title);
+			assert.equal(parent.key, original.key);
+			assert.equal(parent.getField('title'), original.title);
+			assert.equal(parent.getField('pages'), '1-12');
+			assert.equal(parent.getField('citationKey'), 'KeepMyKey');
+			assert.deepEqual(parent.getCollections(), [collection.id]);
+			assert.deepEqual(parent.getTags(), original.tags);
+			assert.deepEqual(pdf.toJSON(), originalPDF);
+		}
+		finally { await parent.eraseTx(); await collection.eraseTx(); win.close(); }
+	});
+
+	it('refreshes books by ISBN and rejects cancellation, type changes and concurrent edits without overwriting data', async function () {
+		let parent = await createDataObject('item', { itemType: 'book', title: 'A book without a DOI' });
+		parent.setField('ISBN', '9780262046305');
+		await parent.saveTx();
+		let before = parent.toJSON();
+		let record = { itemType: 'book', title: before.title, creators: [], ISBN: before.ISBN, publisher: 'Publisher' };
+		let query = sandbox.stub(recognizer, 'queryPDFMetadata').resolves({ status: 'matched', item: record });
+		let choose = sandbox.stub(recognizer, 'chooseRecognitionCandidate').returns(null);
+		try {
+			assert.isTrue(recognizer.canRefreshMetadata(parent));
+			assert.isFalse(recognizer.canRefreshPublishedMetadata(parent));
+			assert.isFalse(await recognizer.refreshMetadata(parent));
+			assert.equal(query.firstCall.args[0].metadata.ISBN, before.ISBN);
+			assert.deepEqual(parent.toJSON(), before);
+			choose.returns({ ...record, itemType: 'preprint' });
+			assert.include((await getPromiseError(recognizer.refreshMetadata(parent))).message, 'No verified');
+			assert.deepEqual(parent.toJSON(), before);
+			choose.returns(record);
+			assert.isTrue(await recognizer.refreshMetadata(parent));
+			assert.equal(parent.getField('publisher'), 'Publisher');
+			query.callsFake(async () => {
+				parent.setField('title', 'Concurrent user edit');
+				await parent.saveTx();
+				return { status: 'matched', item: record };
+			});
+			assert.include((await getPromiseError(recognizer.refreshMetadata(parent))).message, 'item changed');
+			assert.equal(parent.getField('title'), 'Concurrent user edit');
+		}
+		finally { await parent.eraseTx(); }
 	});
 
 	it('respects the automatic-tag preference without discarding other descriptive metadata', async function () {

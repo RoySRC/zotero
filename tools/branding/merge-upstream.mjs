@@ -22,6 +22,10 @@ export function prepare(directory, baseRef, upstreamRef) {
 	const ancestor = git(directory, 'merge-base', base, upstream);
 	const incoming = git(directory, 'diff', '--name-only', ancestor, upstream).split('\n');
 	assert.ok(!incoming.some(file => file.startsWith('tools/branding/')
+		|| file.startsWith('tools/updates/')
+		|| file === 'resource/epilibUpdates.mjs'
+		|| file === 'resource/epilib-release.json'
+		|| file === '.github/workflows/epilib-release.yml'
 		|| file === '.github/workflows/epilib-upstream.yml'
 		|| file === '.github/workflows/epilib-branding.yml'), 'Upstream modified integration policy; manual review required');
 	const merged = spawnSync('git', ['merge', '--no-ff', '--no-commit', upstream], { cwd: directory, encoding: 'utf8' });

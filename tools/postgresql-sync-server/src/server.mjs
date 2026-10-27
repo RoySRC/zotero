@@ -687,13 +687,25 @@ async function uploadObjects(req, res) {
 				};
 				continue;
 			}
-			// Bulk POSTs also contain patches, including collection trash/restore updates.
-			let shouldMerge = existingRow
-				&& (req.method == 'PATCH' || objectType != 'item'
-					|| isPartialItemUpdate(objectType, object));
-			let data = shouldMerge
+			// Both bulk POST and PATCH update only the supplied fields of an existing
+			// object. In particular, changing itemType (e.g. preprint -> conferencePaper)
+			// does not turn a patch into a full replacement: unchanged title, collections,
+			// tags, etc. are omitted by desktop sync. Preserve them in storage and in the
+			// complete success response that the desktop applies back to its local item.
+			// Explicit empty strings/arrays still overwrite old values to support clearing.
+			let data = existingRow
 				? Object.assign({}, existingRow.data, object)
 				: Object.assign({}, object);
+			if (objectType == 'item' && existingRow && data.itemType != existingRow.data.itemType) {
+				// Type changes blank fields that are no longer valid, such as archiveID
+				// on preprint -> conferencePaper. Return a sparse record without empty
+				// strings: even an empty obsolete field fails the desktop's strict importer.
+				// An omitted field in this complete response clears the local value just
+				// as an empty string would; arrays/booleans retain their clearing semantics.
+				for (let field of Object.keys(data)) {
+					if (data[field] === '') delete data[field];
+				}
+			}
 			data = normalizeObjectHierarchy(objectType, data);
 			if (objectType == 'item' && !data.itemType) {
 				failed[i] = { code: 400, message: 'itemType property not provided' };
@@ -1726,17 +1738,6 @@ function isStoredAttachment(data) {
 	}
 	let linkMode = `${data.linkMode || ''}`.toLowerCase();
 	return linkMode == 'imported_file' || linkMode == 'imported_url';
-}
-
-function isPartialItemUpdate(objectType, data) {
-	if (objectType != 'item' || !data) {
-		return false;
-	}
-	if (data.itemType) {
-		return false;
-	}
-	let keys = Object.keys(data).filter(key => key != 'key' && key != 'version');
-	return keys.length > 0;
 }
 
 function normalizeHash(value) {

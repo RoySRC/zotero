@@ -827,7 +827,9 @@ attachment-rename-from-parent =
     .tooltiptext = Rename File to Match Parent Item
 
 account-log-in = Log In
-account-not-logged-in-text = Log in to your Zotero account to sync your data.
+account-not-logged-in-text = Log in to your EpiLib account on your configured metadata server to sync your data.
+# A separate key avoids outdated cloud-account translations in other locales.
+account-epilib-not-logged-in-text = Log in to your EpiLib account on your configured metadata server to sync your data.
 account-error-login-session-expired = Your login session has expired. Please try again.
 
 
@@ -1346,4 +1348,22 @@ menu-edit-undo-action = Undo { $action }
 menu-edit-redo-action = Redo { $action }
 
 local-api-authorize-title = Local API Authorization
+
+epilib-updates-window =
+    .title = EpiLib Updates
+epilib-updates-heading = EpiLib Updates
+epilib-updates-checking = Checking for updates...
+epilib-updates-automatic =
+    .label = Check for EpiLib updates automatically
+epilib-updates-check =
+    .label = Check Again
+epilib-updates-open =
+    .label = Open Release Page
+epilib-updates-close =
+    .label = Close
+epilib-updates-available = EpiLib { $version } is available. Installed: { $current }.
+epilib-updates-current = EpiLib { $current } is up to date.
+epilib-updates-development = This is a development build. Latest EpiLib release: { $version }.
+epilib-updates-unavailable = The EpiLib update feed is unavailable. Check your connection or visit the release page. A public release may not have been published yet.
+
 local-api-authorize-text = “{ $appName }”, an application running on your computer, wants to modify your { -app-name } library.

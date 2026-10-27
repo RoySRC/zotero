@@ -49,22 +49,26 @@
     "package.json": [["\"description\": \"Zotero\"", "\"description\": \"{product} research library\""]]
   },
   "requiredSourcePatterns": {
-    "resource/config.mjs": ["CLIENT_NAME: 'EpiLib'", "DATA_DIRECTORY_NAME: 'Zotero'"],
+    "resource/config.mjs": ["CLIENT_NAME: 'EpiLib'", "DATA_DIRECTORY_NAME: 'Zotero'", "DOWNLOAD_URL: \"https://epilib\\.org/downloads\"", "SUPPORT_URL: \"https://epilib\\.org/\""],
     "chrome/content/zotero/xpcom/dataDirectory.js": ["ZOTERO_CONFIG.DATA_DIRECTORY_NAME"],
     "chrome/content/zotero/xpcom/error.js": ["Zotero\\.Error\\.prototype\\.name = \"Zotero Error\""],
-    "app/assets/application.ini": ["^Name=Zotero$", "^Vendor=Zotero$", "^ID=zotero@zotero\\.org$", "^URL=https://www\\.zotero\\.org/download/client/update/"],
+    "app/assets/application.ini": ["^Name=Zotero$", "^Vendor=Zotero$", "^ID=zotero@zotero\\.org$", "^URL=$"],
     "app/assets/prefs.js": ["^pref\\(\"app\\.update\\.auto\", false\\);$"],
     "app/assets/branding/locale/brand.properties": ["^brandShortName=EpiLib$", "^brandFullName=EpiLib$"],
     "app/assets/branding/locale/brand.ftl": ["^-brand-full-name = EpiLib$"],
     "app/mac/Contents/Info.plist": ["<key>CFBundleDisplayName</key>\\s*<string>EpiLib</string>", "<key>CFBundleIconFile</key>\\s*<string>epilib\\.icns</string>"],
     "app/linux/zotero.desktop": ["^Name=EpiLib$", "x-scheme-handler/zotero"],
-    "app/win/installer/defines.nsi": ["BrandShortName\\s+\"EpiLib\""],
+    "app/win/installer/defines.nsi": ["BrandShortName\\s+\"EpiLib\"", "InstallerRegistryKey\\s+\"Software\\\\EpiLib\"", "AppPathAlias\\s+\"EpiLib\\.exe\""],
     "app/win/installer/app.tag": ["Title=\"EpiLib\""],
     "app/build.sh": ["APPDIR=\"\\$STAGE_DIR/EpiLib\\.app\"", "rebrand-integrations\\.py", "ln -s EpiLib\\.app"],
     "js-build/reader.js": ["require\\('./branding'\\)"],
     "js-build/note-editor.js": ["require\\('./branding'\\)"],
     "chrome/content/zotero/about.xhtml": ["alt=\"EpiLib\"", "about\\.epilibFork", "about\\.createdBy"],
     "chrome/content/zotero/xpcom/sync/syncMetadataServer.js": ["loginPostgreSQL"],
-    "chrome/content/zotero/xpcom/storage/storageProfiles.js": ["getWebDAVProfileForLibrary"]
+    "chrome/content/zotero/xpcom/storage/storageProfiles.js": ["getWebDAVProfileForLibrary"],
+    "app/win/installer/branding.nsi": ["BrandFullNameInternal\\s+\"EpiLib\""],
+    "app/win/installer/installer.nsi": ["!insertmacro EpiLibCheckInstallDirectory"],
+    "app/win/installer/uninstaller.nsi": ["!insertmacro EpiLibRequireOwnedInstall"],
+    "chrome/content/zotero/xpcom/sync/syncRunner.js": ["formatValueSync\\('account-epilib-not-logged-in-text'\\)"]
   }
 }

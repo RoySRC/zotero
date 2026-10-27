@@ -441,6 +441,7 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 		Zotero.debug('Initializing Word Processor plugins');
 		Zotero.Integration.init();
 		await Zotero.Plugins.init();
+		Zotero.EpiLibUpdates.init();
 	}
 	
 	
@@ -700,6 +701,7 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 			OptionsAutoComplete.init();
 
 			await Zotero.Users.init();
+			Zotero.Sync.Metadata.pinLegacyCredentialScope();
 			await Zotero.Libraries.init();
 			
 			await Zotero.ID.init();
@@ -1128,9 +1130,10 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 	}
 	
 	
-	this.openCheckForUpdatesWindow = function ({ modal } = {}) {
-		let win = Services.wm.getMostRecentWindow('Update:Wizard');
-		if (win) {
+	this.openCheckForUpdatesWindow = function ({ modal, result } = {}) {
+		let win = Services.wm.getMostRecentWindow('EpiLib:Updates');
+		if (win && !win.closed) {
+			if (result && win.EpiLibUpdateWindow) win.EpiLibUpdateWindow.showResult(result);
 			win.focus();
 		}
 		else {
@@ -1138,8 +1141,10 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 			if (modal) {
 				flags += ',modal';
 			}
-			Services.ww.openWindow(null, 'chrome://zotero/content/update/updates.xhtml',
-				'updateChecker', flags, null);
+			let args = { result };
+			args.wrappedJSObject = args;
+			Services.ww.openWindow(null, 'chrome://zotero/content/update/epilibUpdates.xhtml',
+				'updateChecker', flags, args);
 		}
 	};
 	

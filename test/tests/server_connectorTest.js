@@ -89,7 +89,7 @@ describe("Connector Server", function () {
 					testBrowserRequest: true,
 				}
 			);
-			assert.include(response, 'Zotero is running');
+			assert.include(response, 'EpiLib is running');
 		});
 	});
 

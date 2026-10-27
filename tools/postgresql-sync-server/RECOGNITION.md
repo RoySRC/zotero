@@ -76,8 +76,10 @@ identifier extractor. The new desktop understands both the legacy version 1
 response and the complete-record version 2 response during upgrades.
 # Personal provider credentials
 
-The desktop's General > PDF Recognition > Provider API Keys editor stores secrets
-in its local login manager, scoped to the recognition URL and account. The
+The desktop's General > PDF Recognition > Provider API Keys editor encrypts secrets
+with Mozilla's OSKeyStore (macOS Keychain, Windows DPAPI, or Linux Secret Service)
+before saving the ciphertext in its local login manager. Provider keys are scoped
+to the recognition URL and account; paired WorldCat values are saved atomically. The
 authenticated gateway forwards a request's `providerKeys` object to its configured
 worker without storing it in PostgreSQL or merging it into shared server settings.
 The updated worker removes this object before extraction, caching and response
@@ -88,6 +90,54 @@ Use HTTPS between desktop and gateway except for loopback, and a trusted private
 network or HTTPS between gateway and worker. Do not enable request-body logging
 on proxies. Metadata account tokens, worker service keys, and provider API keys
 are separate credentials and must never be substituted for one another.
+
+## Desktop credential storage and migration
+
+`Zotero.CredentialStore` is the shared persistence layer for provider API keys and
+PostgreSQL account tokens. An encrypted, versioned envelope binds each secret to
+its login realm and username. The OS protects the encryption key; the profile's
+login database holds ciphertext, not an extra plaintext copy. The older NSS
+login-database protection remains in place as well. API keys are not stored in
+ordinary preferences, SQLite metadata caches, or shared repository records.
+
+Account tokens have separate realms for each canonical server base URL (including
+its path and port) and server-issued user ID. Login, registration, and password
+changes save under the response's identity, never the previous local user.
+Logging out removes only that account's token. Changing the URL does not transfer
+an existing token to the new destination. Credentials are decrypted only when
+needed; Settings presence checks do not unlock the keychain.
+
+Migration is lazy on first use, so it does not unlock every stored account at
+startup. The old global account token is pinned to the startup URL/user in a
+nonsecret preference before Settings can change either. Before migration, the
+client confirms `/keys/current` at that original server returns the same user ID.
+If the identity is unknown, mismatched, or the server is offline, the legacy entry
+is preserved and a fresh login (or retry after reconnecting) is required. A token
+is never tried against other servers to discover where it belongs. Existing
+provider-key entries retain their original URL/user scope.
+
+The sequence is encrypt, verify, persist, read back and verify, then remove the
+legacy entry. Failed persistence restores the previous encrypted entry; failed
+migration leaves the legacy source available for retry. Interrupted cleanup is
+resumed on the next read. Pending operations are invalidated by logout or account
+changes so a late keychain unlock cannot overwrite or resurrect credentials.
+There is no plaintext fallback when OS storage is unavailable. A locked keychain
+must be unlocked; a profile copied to another machine/OS account may require
+logging in and re-entering provider keys because its OS encryption key is not
+part of the profile backup. No server-side token hashes or passwords are changed.
+
+Regression coverage is in `test/tests/apiCredentialsTest.js`, supplemented by
+the existing provider-key, account, sync-isolation and shared-repository suites.
+The fault-injection tests use synthetic keys and the real Mozilla login database.
+To additionally exercise the actual OS keychain on an unlocked development host:
+
+```sh
+EPILIB_TEST_NATIVE_KEYCHAIN=1 CI=1 test/runtests.sh apiCredentials
+```
+
+Headless CI skips only this native OS-service check; deterministic encryption,
+migration, rollback, isolation and race tests still run.
+
 ## Shared metadata repository (local desktop engine)
 
 The account server now also exposes `/metadata-repository/v1/health`, `/query`,

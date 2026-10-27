@@ -28,13 +28,18 @@
 			<label id="version"/>
 			<label id="changelog" is="zotero-text-link" value="&zotero.whatsNew;"/>
 		</hbox>
-		<script>
+		<script><![CDATA[
 			var version = Zotero.version;
 			if (!Zotero.isMac) {
 				version += ` (${Services.appinfo.is64Bit ? '64' : '32'}-bit)`;
 			}
 			document.getElementById('version').textContent = version
-		</script>
+			Zotero.EpiLibUpdates.getBuildInfo().then(build => {
+				if (!window.closed && build.version) {
+					document.getElementById('version').textContent = `${build.version} (${version})`;
+				}
+			});
+		]]></script>
 		<vbox>
 			<div id="about-text" xmlns="http://www.w3.org/1999/xhtml">
 				<p id="fork-notice"></p>

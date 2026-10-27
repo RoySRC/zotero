@@ -103,6 +103,8 @@ function generate_app_hash {
 	(
 		cd "$app_dir"
 		local paths=(assets build.sh config.sh scripts mac win linux modules update-packaging)
+		# Runtime update isolation lives outside app/ but must invalidate staged builds.
+		paths+=(../tools/updates/harden-runtime.py)
 		if [ -f config-custom.sh ]; then
 			paths+=(config-custom.sh)
 		fi
