@@ -1,0 +1,406 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero/skin/zotero.css" type="text/css"?>
+
+<window
+	xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+	xmlns:html="http://www.w3.org/1999/xhtml"
+	id="postgresql-library-dialog-window"
+	title="Library"
+	width="760"
+	onload="Zotero_PostgreSQL_Library_Dialog.onLoad(); sizeToContent()">
+	<script src="chrome://zotero/content/include.js"/>
+
+	<dialog
+		id="postgresql-library-dialog"
+		buttons="cancel,accept">
+		<vbox class="postgresql-library-dialog">
+			<description id="postgresql-library-dialog-description"/>
+
+			<html:div id="postgresql-library-create-fields"
+				class="postgresql-library-dialog-form">
+				<html:label class="postgresql-library-dialog-label"
+					for="postgresql-library-name">Name</html:label>
+				<html:input id="postgresql-library-name"/>
+
+				<html:label class="postgresql-library-dialog-label"
+					for="postgresql-library-owner">Owner</html:label>
+				<html:select id="postgresql-library-owner"/>
+			</html:div>
+
+			<html:div id="postgresql-library-member-fields"
+				class="postgresql-library-dialog-form">
+				<html:label class="postgresql-library-dialog-label">Members</html:label>
+				<html:div id="postgresql-library-members"
+					class="postgresql-library-dialog-members">
+					<html:div class="postgresql-library-dual-list-panel">
+						<html:label for="postgresql-library-available-members">Available users</html:label>
+						<html:input id="postgresql-library-member-filter"
+							type="search"
+							placeholder="Search users"/>
+						<html:select id="postgresql-library-available-members"
+							multiple="multiple"
+							size="8"/>
+					</html:div>
+
+					<html:div class="postgresql-library-dual-list-actions">
+						<html:button id="postgresql-library-add-members"
+							type="button">Add &gt;</html:button>
+						<html:button id="postgresql-library-remove-members"
+							type="button">&lt; Remove</html:button>
+					</html:div>
+
+					<html:div class="postgresql-library-dual-list-panel">
+						<html:label for="postgresql-library-selected-members">Members</html:label>
+						<html:select id="postgresql-library-selected-members"
+							multiple="multiple"
+							size="8"/>
+					</html:div>
+				</html:div>
+			</html:div>
+
+			<html:fieldset id="postgresql-library-delete-fields"
+				class="postgresql-library-delete-section"
+				hidden="true">
+				<html:legend>Safe deletion</html:legend>
+				<html:p>
+					Transfer ownership to an existing member before removing this library from your account.
+				</html:p>
+				<html:label class="postgresql-library-delete-toggle">
+					<html:input id="postgresql-library-delete-enabled"
+						type="checkbox"/>
+					Delete this library from my account
+				</html:label>
+				<html:div id="postgresql-library-new-owner-row"
+					class="postgresql-library-dialog-form"
+					hidden="true">
+					<html:label class="postgresql-library-dialog-label"
+						for="postgresql-library-new-owner">New owner</html:label>
+					<html:select id="postgresql-library-new-owner"/>
+				</html:div>
+			</html:fieldset>
+		</vbox>
+	</dialog>
+
+	<script>
+	<![CDATA[
+		var Zotero_PostgreSQL_Library_Dialog = {
+			io: null,
+			htmlNS: 'http://www.w3.org/1999/xhtml',
+			selectedMemberIDs: new Set(),
+			protectedMemberIDs: new Set(),
+
+			onLoad() {
+				this.io = window.arguments[0] || {};
+				document.addEventListener('dialogaccept', event => {
+					if (!this.accept()) {
+						event.preventDefault();
+					}
+				});
+
+				if (this.io.mode == 'settings') {
+					this.initSettings();
+				}
+				else if (this.io.mode == 'safe-delete') {
+					this.initSafeDelete();
+				}
+				else {
+					this.initCreate();
+				}
+			},
+
+			initCreate() {
+				document.title = 'Create Library';
+				document.getElementById('postgresql-library-dialog')
+					.getButton('accept').label = 'Create Library';
+				document.getElementById('postgresql-library-dialog-description').value =
+					'Create a PostgreSQL-backed group library and choose its owner and members.';
+				document.getElementById('postgresql-library-delete-fields').hidden = true;
+				this.populateOwnerSelect(document.getElementById('postgresql-library-owner'), {
+					includeCurrentUser: true
+				});
+				this.initMemberSelector({
+					initialMemberIDs: [this.io.currentUserID].filter(Boolean),
+					protectOwner: true,
+					protectCurrentUser: true
+				});
+				document.getElementById('postgresql-library-owner')
+					.addEventListener('change', () => {
+						this.updateProtectedMemberIDs({ protectOwner: true, protectCurrentUser: true });
+						this.renderMemberSelector();
+					});
+				document.getElementById('postgresql-library-name').focus();
+			},
+
+			initSettings() {
+				document.title = `${this.io.libraryName || 'Library'} Settings`;
+				document.getElementById('postgresql-library-dialog')
+					.getButton('accept').label = 'Save Settings';
+				document.getElementById('postgresql-library-create-fields').hidden = true;
+				document.getElementById('postgresql-library-delete-fields').hidden = false;
+				document.getElementById('postgresql-library-dialog-description').value =
+					`Manage members and safe deletion for "${this.io.libraryName || 'this library'}".`;
+
+				this.initMemberSelector({
+					initialMemberIDs: this.io.memberUserIDs || [],
+					protectOwner: true,
+					protectCurrentUser: true
+				});
+
+				let deleteCheckbox = document.getElementById('postgresql-library-delete-enabled');
+				deleteCheckbox.addEventListener('change', () => this.renderDeleteControls());
+				this.renderDeleteControls();
+				document.getElementById('postgresql-library-member-filter').focus();
+			},
+
+			initSafeDelete() {
+				document.title = 'Safe Delete Library';
+				document.getElementById('postgresql-library-dialog')
+					.getButton('accept').label = 'Safe Delete';
+				document.getElementById('postgresql-library-create-fields').hidden = true;
+				document.getElementById('postgresql-library-member-fields').hidden = true;
+				document.getElementById('postgresql-library-delete-fields').hidden = false;
+				document.getElementById('postgresql-library-dialog-description').value =
+					`Choose a new owner before removing "${this.io.libraryName || 'this library'}" from this account.`;
+				document.getElementById('postgresql-library-delete-enabled').checked = true;
+				document.getElementById('postgresql-library-delete-enabled').hidden = true;
+				this.selectedMemberIDs = new Set((this.io.memberUserIDs || []).map(Number).filter(Boolean));
+				this.renderDeleteControls();
+			},
+
+			populateOwnerSelect(select, { includeCurrentUser }) {
+				select.replaceChildren();
+				let users = this.sortedUsers().filter(user => {
+					return includeCurrentUser || Number(user.id) != Number(this.io.currentUserID);
+				});
+				for (let user of users) {
+					let option = document.createElementNS(this.htmlNS, 'option');
+					option.value = user.id;
+					option.textContent = this.userLabel(user);
+					select.appendChild(option);
+				}
+				let preferredUserID = includeCurrentUser && this.io.currentUserID
+					? this.io.currentUserID
+					: users[0]?.id;
+				if (preferredUserID) {
+					select.value = preferredUserID;
+				}
+				return users.length > 0;
+			},
+
+			initMemberSelector({ initialMemberIDs, protectOwner, protectCurrentUser }) {
+				this.selectedMemberIDs = new Set((initialMemberIDs || []).map(Number).filter(Boolean));
+				this.updateProtectedMemberIDs({ protectOwner, protectCurrentUser });
+
+				document.getElementById('postgresql-library-member-filter')
+					.addEventListener('input', () => this.renderMemberSelector());
+				document.getElementById('postgresql-library-add-members')
+					.addEventListener('click', () => this.moveSelectedUsers({
+						from: 'postgresql-library-available-members',
+						selected: true
+					}));
+				document.getElementById('postgresql-library-remove-members')
+					.addEventListener('click', () => this.moveSelectedUsers({
+						from: 'postgresql-library-selected-members',
+						selected: false
+					}));
+				document.getElementById('postgresql-library-available-members')
+					.addEventListener('dblclick', () => this.moveSelectedUsers({
+						from: 'postgresql-library-available-members',
+						selected: true
+					}));
+				document.getElementById('postgresql-library-selected-members')
+					.addEventListener('dblclick', () => this.moveSelectedUsers({
+						from: 'postgresql-library-selected-members',
+						selected: false
+					}));
+				this.renderMemberSelector();
+			},
+
+			updateProtectedMemberIDs({ protectOwner, protectCurrentUser }) {
+				this.protectedMemberIDs = new Set();
+				if (protectOwner) {
+					let ownerUserID = this.getOwnerUserID();
+					if (ownerUserID) {
+						this.protectedMemberIDs.add(ownerUserID);
+					}
+				}
+				if (protectCurrentUser && this.io.currentUserID) {
+					this.protectedMemberIDs.add(Number(this.io.currentUserID));
+				}
+				for (let userID of this.protectedMemberIDs) {
+					this.selectedMemberIDs.add(userID);
+				}
+			},
+
+			getOwnerUserID() {
+				if (this.io.mode == 'create') {
+					return parseInt(document.getElementById('postgresql-library-owner').value, 10);
+				}
+				return parseInt(this.io.ownerUserID || 0, 10);
+			},
+
+			moveSelectedUsers({ from, selected }) {
+				let select = document.getElementById(from);
+				for (let option of Array.from(select.selectedOptions)) {
+					let userID = Number(option.value);
+					if (selected) {
+						this.selectedMemberIDs.add(userID);
+					}
+					else if (!this.protectedMemberIDs.has(userID)) {
+						this.selectedMemberIDs.delete(userID);
+					}
+				}
+				this.renderMemberSelector();
+			},
+
+			renderMemberSelector() {
+				let filter = document.getElementById('postgresql-library-member-filter')
+					.value.trim().toLocaleLowerCase();
+				let availableSelect = document.getElementById('postgresql-library-available-members');
+				let selectedSelect = document.getElementById('postgresql-library-selected-members');
+				availableSelect.replaceChildren();
+				selectedSelect.replaceChildren();
+
+				for (let user of this.sortedUsers()) {
+					let userID = Number(user.id);
+					let label = this.userLabel(user);
+					let selected = this.selectedMemberIDs.has(userID);
+					if (!selected && (!filter || label.toLocaleLowerCase().includes(filter))) {
+						availableSelect.appendChild(this.createUserOption(user));
+					}
+					else if (selected) {
+						selectedSelect.appendChild(this.createUserOption(user, {
+							disabled: this.protectedMemberIDs.has(userID)
+						}));
+					}
+				}
+				this.renderDeleteControls();
+			},
+
+			renderDeleteControls() {
+				let deleteFields = document.getElementById('postgresql-library-delete-fields');
+				if (deleteFields.hidden) {
+					return;
+				}
+				let deleteEnabled = document.getElementById('postgresql-library-delete-enabled').checked;
+				let ownerRow = document.getElementById('postgresql-library-new-owner-row');
+				ownerRow.hidden = !deleteEnabled;
+				if (!deleteEnabled) {
+					return;
+				}
+
+				let select = document.getElementById('postgresql-library-new-owner');
+				let previousValue = select.value;
+				select.replaceChildren();
+
+				let candidateIDs = [...this.selectedMemberIDs]
+					.filter(id => Number(id) != Number(this.io.currentUserID))
+					.sort((a, b) => this.userLabelForID(a).localeCompare(this.userLabelForID(b)));
+				for (let userID of candidateIDs) {
+					let user = this.getUserByID(userID);
+					if (!user) {
+						continue;
+					}
+					let option = document.createElementNS(this.htmlNS, 'option');
+					option.value = user.id;
+					option.textContent = this.userLabel(user);
+					select.appendChild(option);
+				}
+				if (candidateIDs.includes(Number(previousValue))) {
+					select.value = previousValue;
+				}
+				else if (candidateIDs.length) {
+					select.value = candidateIDs[0];
+				}
+				select.disabled = !candidateIDs.length;
+			},
+
+			createUserOption(user, { disabled = false } = {}) {
+				let option = document.createElementNS(this.htmlNS, 'option');
+				option.value = user.id;
+				option.textContent = this.userLabel(user);
+				if (disabled) {
+					option.disabled = true;
+				}
+				return option;
+			},
+
+			accept() {
+				if (this.io.mode == 'safe-delete') {
+					return this.acceptSafeDeleteOnly();
+				}
+				if (this.io.mode == 'settings') {
+					return this.acceptSettings();
+				}
+				return this.acceptCreate();
+			},
+
+			acceptCreate() {
+				let name = document.getElementById('postgresql-library-name').value.trim();
+				let ownerUserID = parseInt(document.getElementById('postgresql-library-owner').value, 10);
+				if (!name || !ownerUserID) {
+					return false;
+				}
+				this.selectedMemberIDs.add(ownerUserID);
+				let memberUserIDs = [...this.selectedMemberIDs].filter(Boolean);
+				this.io.out = { name, ownerUserID, memberUserIDs };
+				return true;
+			},
+
+			acceptSettings() {
+				let memberUserIDs = [...this.selectedMemberIDs].filter(Boolean);
+				let deleteLibrary = document.getElementById('postgresql-library-delete-enabled').checked;
+				let out = { memberUserIDs, deleteLibrary };
+				if (deleteLibrary) {
+					let newOwnerUserID = parseInt(
+						document.getElementById('postgresql-library-new-owner').value,
+						10
+					);
+					if (!newOwnerUserID || !this.selectedMemberIDs.has(newOwnerUserID)
+							|| newOwnerUserID == this.io.currentUserID) {
+						return false;
+					}
+					out.newOwnerUserID = newOwnerUserID;
+				}
+				this.io.out = out;
+				return true;
+			},
+
+			acceptSafeDeleteOnly() {
+				let newOwnerUserID = parseInt(
+					document.getElementById('postgresql-library-new-owner').value,
+					10
+				);
+				if (!newOwnerUserID || !this.selectedMemberIDs.has(newOwnerUserID)) {
+					return false;
+				}
+				this.io.out = { newOwnerUserID };
+				return true;
+			},
+
+			sortedUsers() {
+				return [...(this.io.users || [])].sort((a, b) => {
+					return this.userLabel(a).localeCompare(this.userLabel(b));
+				});
+			},
+
+			getUserByID(userID) {
+				return (this.io.users || []).find(user => Number(user.id) == Number(userID));
+			},
+
+			userLabelForID(userID) {
+				let user = this.getUserByID(userID);
+				return user ? this.userLabel(user) : `${userID}`;
+			},
+
+			userLabel(user) {
+				let displayName = user.displayName || user.username || user.id;
+				return user.username && user.username != displayName
+					? `${displayName} (${user.username})`
+					: `${displayName}`;
+			}
+		};
+	]]>
+	</script>
+</window>

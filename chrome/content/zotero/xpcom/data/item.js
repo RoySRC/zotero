@@ -345,7 +345,7 @@ Zotero.Item.prototype._parseRowData = function (row) {
 	var primaryFields = this.ObjectsClass.primaryFields;
 	for (let i=0; i<primaryFields.length; i++) {
 		let col = primaryFields[i];
-		
+
 		try {
 			var val = row[col];
 		}
@@ -1578,7 +1578,7 @@ Zotero.Item.prototype.isEditable = function (op = 'edit') {
 	if (this.isAttachment()
 			&& (this.attachmentLinkMode == Zotero.Attachments.LINK_MODE_IMPORTED_URL
 				|| this.attachmentLinkMode == Zotero.Attachments.LINK_MODE_IMPORTED_FILE)
-			&& !Zotero.Libraries.get(this.libraryID).filesEditable) {
+			&& !Zotero.Sync.Storage.Profiles.canSaveFilesForLibrary(this.libraryID)) {
 		return false;
 	}
 	
@@ -5438,7 +5438,7 @@ Zotero.Item.prototype.moveToLibrary = async function (libraryID, onSkippedAttach
 	if (!library.editable) {
 		throw new Error("Can't move item to read-only library");
 	}
-	var filesEditable = library.filesEditable;
+	var filesEditable = Zotero.Sync.Storage.Profiles.canSaveFilesForLibrary(libraryID);
 	var allowsLinkedFiles = library.allowsLinkedFiles;
 	
 	var newItem = await Zotero.DB.executeTransaction(async function () {
@@ -5699,6 +5699,19 @@ Zotero.Item.prototype.fromJSON = function (json, options = {}) {
 	}
 	var invalidFieldLogLines = new Map();
 	
+	let setAttachmentLinkMode = (val) => {
+		let linkMode = Zotero.Attachments["LINK_MODE_" + val.toUpperCase()];
+		if (linkMode === undefined) {
+			let e = new Error(`Unknown attachment link mode '${val}'`);
+			e.name = "ZoteroInvalidDataError";
+			throw e;
+		}
+		this.attachmentLinkMode = linkMode;
+	};
+	if (json.linkMode !== undefined) {
+		setAttachmentLinkMode(json.linkMode);
+	}
+
 	for (let field in json) {
 		let val = json[field];
 		
@@ -5781,13 +5794,7 @@ Zotero.Item.prototype.fromJSON = function (json, options = {}) {
 		// Attachment metadata
 		//
 		case 'linkMode':
-			let linkMode = Zotero.Attachments["LINK_MODE_" + val.toUpperCase()];
-			if (linkMode === undefined) {
-				let e = new Error(`Unknown attachment link mode '${val}'`);
-				e.name = "ZoteroInvalidDataError";
-				throw e;
-			}
-			this.attachmentLinkMode = linkMode;
+			setAttachmentLinkMode(val);
 			break;
 		
 		case 'filename':

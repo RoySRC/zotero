@@ -24,13 +24,20 @@ Zotero.Sync.Storage.Local = {
 	notify: async function (action, type, ids, _extraData) {
 		// Clean up cache on group deletion
 		if (action == 'delete' && type == 'group') {
-			for (let libraryID of ids) {
+			for (let groupID of ids) {
+				let libraryID = _extraData[groupID] && _extraData[groupID].libraryID;
+				if (!libraryID) {
+					continue;
+				}
 				if (this.lastFullFileCheck[libraryID]) {
 					delete this.lastFullFileCheck[libraryID];
 				}
 				if (this.storageRemainingForLibrary.has(libraryID)) {
 					this.storageRemainingForLibrary.delete(libraryID);
 				}
+				let libraryProfileKey = `G${groupID}`;
+				Zotero.Sync.Storage.Profiles.clearLibraryProfileByKey(libraryProfileKey);
+				Zotero.Sync.Storage.Profiles.clearWebDAVProjectLibraryByKey(libraryProfileKey);
 			}
 		}
 	},
@@ -41,6 +48,9 @@ Zotero.Sync.Storage.Local = {
 		// user double-clicks on a missing file in download-as-needed mode.
 		if (!Zotero.Users.getCurrentUserID()) {
 			return false;
+		}
+		if (Zotero.Sync.Storage.Profiles.getModeForLibrary(libraryID)) {
+			return true;
 		}
 		var libraryType = Zotero.Libraries.get(libraryID).libraryType;
 		switch (libraryType) {
@@ -68,6 +78,11 @@ Zotero.Sync.Storage.Local = {
 	},
 	
 	getModeForLibrary: function (libraryID) {
+		let profileMode = Zotero.Sync.Storage.Profiles.getModeForLibrary(libraryID);
+		if (profileMode) {
+			return profileMode;
+		}
+
 		var libraryType = Zotero.Libraries.get(libraryID).libraryType;
 		switch (libraryType) {
 		case 'user':

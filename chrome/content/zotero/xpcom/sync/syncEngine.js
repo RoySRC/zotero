@@ -467,6 +467,12 @@ Zotero.Sync.Data.Engine.prototype._downloadUpdatedObjects = async function (obje
 		objectType,
 		queryParams
 	);
+	if (results === false) {
+		results = {
+			libraryVersion: newLibraryVersion !== undefined ? newLibraryVersion : since,
+			versions: {}
+		};
+	}
 	
 	Zotero.debug("VERSIONS:");
 	Zotero.debug(JSON.stringify(results));
@@ -2264,23 +2270,32 @@ Zotero.Sync.Data.Engine.prototype._checkObjectUploadError = async function (obje
 					// If we do still have file-editing access, something else went wrong,
 					// and we should just fail without resetting
 					if (!filesEditable) {
+						if (Zotero.Sync.Storage.Profiles.getWebDAVProfileForLibrary(this.libraryID)
+								&& !Zotero.Sync.Metadata.isPostgreSQLSyncEnabled()) {
+							e.message = "zotero.org rejected attachment metadata because the group "
+								+ "does not allow Zotero Storage file editing. The assigned WebDAV "
+								+ "profile prevents local file resets, but attachment metadata sync "
+								+ "requires the PostgreSQL metadata backend.";
+							return false;
+						}
+
 						let index = Zotero.Sync.Storage.Utilities.showFileWriteAccessLostPrompt(
 							null, this.library
 						);
 						
-						let e = new Error(message);
+						let error = new Error(message);
 						if (index === 0) {
 							let group = Zotero.Groups.get(groupID);
 							group.filesEditable = false;
 							await group.saveTx();
 							
 							await Zotero.Sync.Data.Local.resetUnsyncedLibraryFiles(this.libraryID);
-							e.name = "ZoteroUploadRestartError";
+							error.name = "ZoteroUploadRestartError";
 						}
 						else {
-							e.name = "ZoteroUploadCancelError";
+							error.name = "ZoteroUploadCancelError";
 						}
-						throw e;
+						throw error;
 					}
 				}
 				else {

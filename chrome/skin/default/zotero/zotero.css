@@ -95,3 +95,194 @@ zoterosearch .menulist-icon {
 	display: grid;
 	grid-template-columns: max-content 1fr;
 }
+
+.storage-library-profile-toolbar {
+	display: flex;
+	align-items: center;
+	gap: .65em;
+	margin-top: .85em;
+	margin-bottom: .65em;
+}
+
+.storage-library-profile-toolbar > label {
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+#storage-library-profile-search {
+	width: min(34em, 100%);
+	min-width: 22em;
+	max-width: 34em;
+}
+
+#storage-library-create {
+	margin-inline-start: auto;
+	white-space: nowrap;
+}
+
+#storage-library-profile-table {
+	width: 100%;
+	border: 1px solid var(--fill-quinary, ThreeDShadow);
+	border-radius: 6px;
+	background: var(--material-background, -moz-Dialog);
+	overflow: hidden;
+}
+
+.storage-library-profile-header-row,
+.storage-library-profile-row {
+	display: grid;
+	grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr) max-content;
+	align-items: center;
+	column-gap: 0;
+}
+
+.storage-library-profile-header-row {
+	background-color: var(--fill-quinary, -moz-Dialog);
+	border-bottom: 1px solid var(--fill-quinary, ThreeDShadow);
+}
+
+.storage-library-profile-row:not(:last-child) {
+	border-bottom: 1px solid var(--fill-quinary, ThreeDShadow);
+}
+
+.storage-library-profile-cell {
+	min-width: 0;
+	padding: .55em .75em;
+}
+
+.storage-library-profile-header-row .storage-library-profile-cell {
+	font-weight: 600;
+	color: var(--fill-secondary, -moz-DialogText);
+}
+
+.storage-library-profile-library-cell {
+	font-weight: 500;
+}
+
+.storage-library-profile-backend-cell {
+	padding-inline-start: .75em;
+}
+
+.storage-library-profile-actions-header,
+.storage-library-profile-actions-cell {
+	text-align: end;
+}
+
+.storage-library-profile-actions-cell {
+	display: flex;
+	justify-content: flex-end;
+}
+
+.storage-library-profile-actions-cell button {
+	white-space: nowrap;
+}
+
+.storage-library-profile-settings-button {
+	width: 2em;
+	height: 2em;
+	padding: 0;
+	border-radius: 4px;
+	background-image: url(chrome://zotero/skin/20/universal/cog.svg);
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: 16px 16px;
+}
+
+.storage-library-profile-library-name {
+	display: flex;
+	align-items: center;
+	gap: .45em;
+	min-width: 0;
+}
+
+.storage-library-profile-library-name > span:first-child {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.storage-library-profile-backend-menu {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.postgresql-library-dialog {
+	min-width: 30em;
+	gap: .75em;
+}
+
+.postgresql-library-dialog-form {
+	display: grid;
+	grid-template-columns: max-content minmax(18em, 1fr);
+	gap: .65em .75em;
+	align-items: center;
+}
+
+.postgresql-library-delete-section[hidden],
+.postgresql-library-dialog-form[hidden] {
+	display: none;
+}
+
+.postgresql-library-dialog-label {
+	font-weight: 600;
+}
+
+.postgresql-library-dialog-form input,
+.postgresql-library-dialog-form select {
+	box-sizing: border-box;
+	width: 100%;
+}
+
+.postgresql-library-dialog-members {
+	display: grid;
+	grid-template-columns: minmax(12em, 1fr) max-content minmax(12em, 1fr);
+	gap: .6em;
+	align-items: end;
+}
+
+.postgresql-library-dual-list-panel {
+	display: grid;
+	gap: .35em;
+	min-width: 0;
+}
+
+.postgresql-library-dual-list-panel label {
+	font-weight: 600;
+}
+
+.postgresql-library-dual-list-panel select {
+	min-height: 11em;
+}
+
+.postgresql-library-dual-list-actions {
+	display: grid;
+	gap: .45em;
+	align-self: center;
+}
+
+.postgresql-library-dual-list-actions button {
+	white-space: nowrap;
+}
+
+.postgresql-library-delete-section {
+	margin: .25em 0 0;
+	padding: .8em;
+	border: 1px solid var(--fill-quinary, ThreeDShadow);
+	border-radius: 4px;
+}
+
+.postgresql-library-delete-section legend {
+	font-weight: 600;
+}
+
+.postgresql-library-delete-section p {
+	margin: 0 0 .65em;
+}
+
+.postgresql-library-delete-toggle {
+	display: flex;
+	align-items: center;
+	gap: .4em;
+	margin-bottom: .65em;
+}
