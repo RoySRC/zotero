@@ -397,34 +397,49 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 
 		it("should not bootstrap a missing profiled WebDAV file from Zotero Storage", async function () {
 			let group = await createGroup({ editable: true, filesEditable: false });
-			let item = new Zotero.Item("attachment");
-			item.libraryID = group.libraryID;
-			item.attachmentLinkMode = 'imported_file';
-			item.attachmentPath = 'storage:test.pdf';
-			item.attachmentSyncState = 'to_download';
-			// Seed an attachment received through metadata sync in a file-read-only group.
-			await item.saveTx({ skipEditCheck: true });
-
-			let profiledController = new Zotero.Sync.Storage.Mode.WebDAV({
-				libraryID: group.libraryID,
-				profileID: 'project-a',
-				apiClient: {},
-				zoteroStorageAPIClient: { apiKey: 'obsolete-cloud-key' }
-			});
-			let initStub = sinon.stub(profiledController, '_init').resolves();
-			let metadataStub = sinon.stub(profiledController, '_getStorageFileMetadata')
-				.resolves(null);
-			let fileExistsStub = sinon.stub(item, 'fileExists');
-			fileExistsStub.onFirstCall().resolves(false);
-			fileExistsStub.onSecondCall().resolves(true);
-			let zfsStub = sinon.stub(Zotero.Sync.Storage.Mode.ZFS.prototype, 'downloadFile')
-				.callsFake(async function () {
-					item.attachmentSyncState = 'in_sync';
-					await item.saveTx({ skipAll: true });
-					return new Zotero.Sync.Storage.Result({ localChanges: true });
-				});
-
+			let profileID = 'project-' + Zotero.Utilities.randomString(8);
+			let sandbox = sinon.createSandbox();
+			let item;
 			try {
+				// Assign the profile before creating an attachment in a group without
+				// Zotero Storage file-editing rights.
+				await Zotero.Sync.Storage.Profiles.setWebDAVProfile(profileID, {
+					scheme: davScheme,
+					url: `${davHostPath}${profileID}/`,
+					username: davUsername
+				});
+				await Zotero.Sync.Storage.Profiles.setLibraryProfile(
+					group.libraryID,
+					profileID,
+					{ resetSyncState: false }
+				);
+
+				item = new Zotero.Item("attachment");
+				item.libraryID = group.libraryID;
+				item.attachmentLinkMode = 'imported_file';
+				item.attachmentPath = 'storage:test.pdf';
+				item.attachmentSyncState = 'to_download';
+				await item.saveTx();
+
+				let profiledController = new Zotero.Sync.Storage.Mode.WebDAV({
+					libraryID: group.libraryID,
+					profileID,
+					apiClient: {},
+					zoteroStorageAPIClient: { apiKey: 'obsolete-cloud-key' }
+				});
+				let initStub = sandbox.stub(profiledController, '_init').resolves();
+				let metadataStub = sandbox.stub(profiledController, '_getStorageFileMetadata')
+					.resolves(null);
+				let fileExistsStub = sandbox.stub(item, 'fileExists');
+				fileExistsStub.onFirstCall().resolves(false);
+				fileExistsStub.onSecondCall().resolves(true);
+				let zfsStub = sandbox.stub(Zotero.Sync.Storage.Mode.ZFS.prototype, 'downloadFile')
+					.callsFake(async function () {
+						item.attachmentSyncState = 'in_sync';
+						await item.saveTx({ skipAll: true });
+						return new Zotero.Sync.Storage.Result({ localChanges: true });
+					});
+
 				let request = new Zotero.Sync.Storage.Request({
 					type: 'download',
 					libraryID: group.libraryID,
@@ -444,11 +459,14 @@ describe("Zotero.Sync.Storage.Mode.WebDAV", function () {
 				);
 			}
 			finally {
-				zfsStub.restore();
-				fileExistsStub.restore();
-				metadataStub.restore();
-				initStub.restore();
-				await item.eraseTx({ skipEditCheck: true });
+				sandbox.restore();
+				if (item && item.id) {
+					await item.eraseTx({ skipEditCheck: true });
+				}
+				await Zotero.Sync.Storage.Profiles.removeWebDAVProfile(
+					profileID,
+					{ resetSyncState: false }
+				);
 				await group.eraseTx({ skipDeleteLog: true });
 			}
 		})
