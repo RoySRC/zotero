@@ -20,4 +20,36 @@ Report EpiLib-specific issues to this fork's maintainers. The upstream [Zotero F
 
 See [Branding and compatibility](tools/branding/README.md) for the names and identifiers intentionally retained.
 
+Rebuilding EpiLib
+----------------
+
+Quit EpiLib, then run this from the desktop checkout:
+
+```sh
+./scripts/rebuild.sh
+```
+
+The script locates the checkout from its own location, so it can also be invoked
+by path from any working directory. It uses the active Node/npm on `PATH`, or
+loads your configured NVM default if Node is unavailable. No username, checkout
+location, or installed Node-version path is hardcoded.
+
+Prepare the usual build dependencies first: Node/npm (Node 24 or newer for the
+recognition engine), Python 3, `npm ci`, initialized submodules, and the platform
+runtime used by `app/scripts/dir_build`. The wrapper does not install or fetch
+these automatically. The recognition engine is bundled by the existing build
+hook, including support for `EPILIB_RECOGNITION_SOURCE`.
+
+This compiles the source, forces a normal (non-test) native app package, and
+checks the finished package. On macOS the output is `app/staging/EpiLib.app`;
+Linux uses `app/staging/Zotero_linux-<architecture>` for compatibility.
+It does not launch EpiLib or modify your profile or library data. Any failed
+stage stops the rebuild with a nonzero exit code.
+
+Run the wrapper's isolated regression/integration tests with:
+
+```sh
+node --test js-build/test/rebuild.test.js
+```
+
 For more information on how to use this source code, see the [Zotero documentation](https://www.zotero.org/support/dev/source_code).
