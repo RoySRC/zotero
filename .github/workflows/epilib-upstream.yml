@@ -107,8 +107,8 @@ jobs:
         run: |
           app/scripts/fetch_xulrunner -p l
           npm run build
-          node --test js-build/test/recognition-engine.test.js
-          xvfb-run -a test/runtests.sh -f -b epilibUpdates epilibBranding epilibSyncIsolation apiCredentials localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview publicationTitleVariant metadataMenuIcons preferences_account storageLocal webdav syncLocal syncEngine syncRunner
+          node --test js-build/test/*.test.js
+          xvfb-run -a test/runtests.sh -f -b epilibUpdates epilibBranding epilibSyncIsolation apiCredentials localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview publicationTitleVariant publicationHyphenation metadataMenuIcons preferences_account storageLocal webdav syncLocal syncEngine syncRunner
           xvfb-run -a test/runtests.sh -f -b -g 'standalone PDF by ISBN' recognizeDocument
           xvfb-run -a npm run test:desktop --prefix tools/postgresql-sync-server
           # Rebuild without the test harness and inspect the finished distributable.

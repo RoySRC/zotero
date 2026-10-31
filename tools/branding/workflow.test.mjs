@@ -28,6 +28,8 @@ test('publication is isolated, pinned, non-forcing and limited to rebranding', (
 			'publicationTitleVariant', 'preferences_account', 'storageLocal', 'webdav', 'syncLocal', 'syncEngine', 'syncRunner']) {
 			assert.ok(suites.includes(required), `Missing required suite: ${required}`);
 		}
+		assert.ok(suites.includes('publicationHyphenation'),
+			'Require the packaged-worker and native-dialog compound-spelling regression');
 		assert.ok(text.includes("-g 'standalone PDF by ISBN' recognizeDocument"));
 		assert.ok(text.includes('python3 tools/branding/test_menu_icons.py'),
 			'Require regression coverage for both metadata commands and their packaged icons');

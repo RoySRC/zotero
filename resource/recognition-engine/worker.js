@@ -5532,13 +5532,25 @@
     }
     return true;
   }
+  function reviewTitleWords(title, counterpart) {
+    let otherWords = new Set(titleKey(counterpart).split(" "));
+    let folded = plainText(title).normalize("NFKC").toLowerCase().replace(new RegExp("\\p{L}+(?:[-\\u2010]\\p{L}+)+", "gu"), (compound) => {
+      let joined = compound.replace(/[-\u2010]/g, "");
+      return otherWords.has(joined) ? joined : compound;
+    });
+    return titleKey(folded).split(" ");
+  }
+  function dropsNonPrefix(from, to) {
+    return from.some((word) => new RegExp("^non\\p{L}+$", "u").test(word) && to.includes(word.slice(3)) && !to.includes(word));
+  }
   function publicationTitleVariant(a, b) {
     if (!a || !b || !(a.itemType == "preprint" && isPublished(b) || b.itemType == "preprint" && isPublished(a))) return false;
     let left = titleKey(a.title), right = titleKey(b.title);
     if (!left || !right || left == right || !sameAuthors(a, b)) return false;
     let negations = /* @__PURE__ */ new Set(["no", "not", "without", "non", "versus", "vs"]);
-    let wordsA = left.split(" "), wordsB = right.split(" ");
+    let wordsA = reviewTitleWords(a.title, b.title), wordsB = reviewTitleWords(b.title, a.title);
     if ([...negations].some((word) => wordsA.includes(word) != wordsB.includes(word))) return false;
+    if (dropsNonPrefix(wordsA, wordsB) || dropsNonPrefix(wordsB, wordsA)) return false;
     let stopWords = /* @__PURE__ */ new Set(["a", "an", "the", "of", "for", "in", "on", "and", "to", "with", "by", "from", "as"]);
     let termsA = new Set(wordsA.filter((word) => !stopWords.has(word)));
     let termsB = new Set(wordsB.filter((word) => !stopWords.has(word)));
