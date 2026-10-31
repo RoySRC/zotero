@@ -4,5 +4,5 @@
 -brand-product-name = EpiLib
 -vendor-short-name = EpiLib
 -app-name = EpiLib
--subscription-name = Zotero Storage
+-subscription-name = Zotero
 trademarkInfo = Zotero is a trademark of the Corporation for Digital Scholarship.
