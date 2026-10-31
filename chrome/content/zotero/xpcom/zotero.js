@@ -326,8 +326,7 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 						);
 						// Revert to home directory
 						if (index == 0) {
-							Zotero.DataDirectory.set(Zotero.DataDirectory.defaultDir);
-							Zotero.Utilities.Internal.quit(true);
+							Zotero.Utilities.Internal.quit(await Zotero.DataDirectory.setToDefault());
 							return;
 						}
 						// Locate data directory
@@ -351,8 +350,7 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 						);
 						// Revert to home directory
 						if (index == 1) {
-							Zotero.DataDirectory.set(Zotero.DataDirectory.defaultDir);
-							Zotero.Utilities.Internal.quit(true);
+							Zotero.Utilities.Internal.quit(await Zotero.DataDirectory.setToDefault());
 							return;
 						}
 						// Locate data directory
@@ -964,12 +962,15 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 		if (Zotero.DataDirectory.dir == Zotero.DataDirectory.defaultDir) {
 			msg += "\n\n" + Zotero.getString('dataDir.location', Zotero.DataDirectory.dir);
 		}
-		// Otherwise suggest moving to default, since there's a good chance this is due to security
+		// Otherwise offer the default location, since there's a good chance this is due to security
 		// software preventing Zotero from accessing the selected directory (particularly if it's
 		// a Firefox profile)
 		else {
 			msg += "\n\n"
-				+ Zotero.getString('dataDir.moveToDefaultLocation', Zotero.clientName)
+				+ Zotero.ftl.formatValueSync(
+					'data-dir-use-default-location',
+					{ button: Zotero.getString('dataDir.useDefaultLocation') }
+				)
 				+ "\n\n"
 				+ Zotero.getString(
 					'dataDir.migration.failure.full.current', Zotero.DataDirectory.dir
@@ -980,6 +981,9 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 				);
 		}
 		Zotero.startupError = msg;
+		if (Zotero.DataDirectory.dir != Zotero.DataDirectory.defaultDir) {
+			_startupErrorHandler = _promptForDefaultDataDir;
+		}
 		return true;
 	}
 
@@ -1008,20 +1012,24 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 			+ "\n\n"
 			+ Zotero.getString('dataDir.location', Zotero.DataDirectory.dir);
 
-		_startupErrorHandler = async function () {
-			let index = Zotero.Prompt.confirm({
-				title: Zotero.getString('general.error'),
-				text: Zotero.startupError,
-				button0: Zotero.getString('dataDir.useDefaultLocation'),
-				button1: Zotero.getString('general.quit'),
-			});
-			// Revert to default location
-			if (index == 0) {
-				Zotero.DataDirectory.set(Zotero.DataDirectory.defaultDir);
-				Zotero.Utilities.Internal.quit(true);
-			}
-		};
+		_startupErrorHandler = _promptForDefaultDataDir;
 		return true;
+	}
+	
+	
+	/**
+	 * Show the startup error with an option to switch to the default data directory
+	 */
+	async function _promptForDefaultDataDir() {
+		let index = Zotero.Prompt.confirm({
+			title: Zotero.getString('general.error'),
+			text: Zotero.startupError,
+			button0: Zotero.getString('dataDir.useDefaultLocation'),
+			button1: Zotero.getString('general.quit'),
+		});
+		if (index == 0) {
+			Zotero.Utilities.Internal.quit(await Zotero.DataDirectory.setToDefault());
+		}
 	}
 
 
