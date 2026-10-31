@@ -261,8 +261,7 @@ Zotero.DataDirectory = {
 						null, {}
 					);
 					if (index == 0) {
-						Zotero.DataDirectory.set(Zotero.DataDirectory.defaultDir);
-						Zotero.Utilities.Internal.quit(true);
+						Zotero.Utilities.Internal.quit(await Zotero.DataDirectory.setToDefault());
 					}
 					else if (index == 1) {
 						Zotero.Utilities.Internal.quit();
@@ -303,6 +302,54 @@ Zotero.DataDirectory = {
 	
 	
 	/**
+	 * Switch to the default data directory if it can be written to, or show an error if not
+	 *
+	 * @return {Promise<Boolean>} - True if the data directory was set to the default location
+	 */
+	setToDefault: async function () {
+		var dir = this.defaultDir;
+		if (!await this._checkWriteAccess(dir)) {
+			return false;
+		}
+		this.set(dir);
+		return true;
+	},
+	
+	
+	/**
+	 * Check that a directory can be created and written to, and show an error if not
+	 *
+	 * @param {String} dir
+	 * @return {Promise<Boolean>}
+	 */
+	_checkWriteAccess: async function (dir) {
+		var existed = false;
+		try {
+			existed = await IOUtils.exists(dir);
+			await Zotero.File.createDirectoryIfMissingAsync(dir);
+			let testFile = PathUtils.join(dir, '.zotero-write-test');
+			await IOUtils.writeUTF8(testFile, '');
+			await IOUtils.remove(testFile);
+		}
+		catch (e) {
+			Zotero.logError(e);
+			Services.prompt.alert(
+				null,
+				Zotero.getString('general.accessDenied'),
+				Zotero.ftl.formatValueSync('data-dir-not-writable', { path: dir })
+					+ "\n\n"
+					+ Zotero.ftl.formatValueSync(
+						'data-dir-check-parent-write-access',
+						{ path: existed ? dir : PathUtils.parent(dir) }
+					)
+			);
+			return false;
+		}
+		return true;
+	},
+	
+	
+	/**
 	 * @return {String|false} - New path or false if not changed
 	 */
 	choose: async function (forceQuitNow, useHomeDir, moreInfoCallback) {
@@ -311,6 +358,9 @@ Zotero.DataDirectory = {
 		var newPath;
 		
 		if (useHomeDir) {
+			if (!await this._checkWriteAccess(this.defaultDir)) {
+				return false;
+			}
 			let changed = this.set(this.defaultDir);
 			if (!changed) {
 				return false;
@@ -354,6 +404,10 @@ Zotero.DataDirectory = {
 						let dialogTitle = Zotero.getString('general.error');
 						let dialogText = Zotero.getString('dataDir.cannotBeLinkedAttachmentBaseDirectory');
 						ps.alert(null, dialogTitle, dialogText);
+						continue;
+					}
+					
+					if (!await this._checkWriteAccess(file.path)) {
 						continue;
 					}
 					
