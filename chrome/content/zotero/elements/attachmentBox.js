@@ -386,7 +386,13 @@
 		}
 
 		async updateInfo() {
-			if (!this.initialized) return;
+			if (!this.initialized || !this.item) return;
+			// Closing/tearing off a tab destroys this pane while filesystem and
+			// indexing promises may still be running. Capture both the item and DOM
+			// generation so old work cannot write into a removed or repurposed pane.
+			const item = this.item;
+			const titleField = this._id('title');
+			const isCurrent = () => this.initialized && this.item === item && this._id('title') === titleField;
 			// Cancel editing filename when refreshing
 			this._isEditingFilename = false;
 			
@@ -399,6 +405,7 @@
 			let selectButton = this._id('select-button');
 
 			let fileExists = this._item.isFileAttachment() && await this._item.fileExists();
+			if (!isCurrent()) return;
 			let isMerge = ["merge", "mergeedit", "filemerge"].includes(this.mode);
 			let isImportedURL = this.item.attachmentLinkMode == Zotero.Attachments.LINK_MODE_IMPORTED_URL;
 			let isLinkedURL = this.item.attachmentLinkMode == Zotero.Attachments.LINK_MODE_LINKED_URL;
@@ -462,7 +469,7 @@
 			if (this.displayPages && this._item.isPDFAttachment()) {
 				Zotero.Fulltext.getPages(this.item.id)
 				.then(function (pages) {
-					if (!this.item) return;
+					if (!isCurrent()) return;
 					
 					pages = pages ? pages.total : null;
 					if (pages) {
@@ -490,7 +497,7 @@
 				else {
 					this.item.attachmentModificationTime
 					.then(function (mtime) {
-						if (!this._id) return;
+						if (!isCurrent()) return;
 						
 						if (mtime) {
 							this._id("dateModified").value = new Date(mtime).toLocaleString();
@@ -504,10 +511,12 @@
 			}
 			
 			// Full-text index information
-			if (this.displayIndexed && fileExists && await Zotero.FullText.canIndex(this.item)) {
+			const canIndex = this.displayIndexed && fileExists && await Zotero.FullText.canIndex(item);
+			if (!isCurrent()) return;
+			if (canIndex) {
 				this.updateItemIndexedState()
 					.then(function () {
-						if (!this.item) return;
+						if (!isCurrent()) return;
 						indexStatusRow.hidden = false;
 					}.bind(this));
 			}
@@ -538,7 +547,8 @@
 			const isRenamePossible = this._item.isAttachment() && !this._item.isTopLevelItem();
 
 			// Hide the rename button for cases where it's not possible to rename from parent, not editable, the file does not exist, or the file name would not be changed
-			this._id("rename-from-parent").hidden = !isRenamePossible || !this.editable || !fileExists || !(await canRenameFileFromParent(this._item));
+			const hideRename = !isRenamePossible || !this.editable || !fileExists || !(await canRenameFileFromParent(item));
+			if (isCurrent()) this._id("rename-from-parent").hidden = hideRename;
 		}
 
 		async updatePreview() {

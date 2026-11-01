@@ -315,7 +315,11 @@
 
 			let { libraryID } = Zotero.Items.getLibraryAndKeyFromID(itemID);
 			let library = Zotero.Libraries.get(libraryID);
+			// Tab notifications can finish after a library has been removed. There
+			// is no context to build in that case; Libraries.get() returns false.
+			if (!library) return;
 			await library.waitForDataLoad('item');
+			if (!this.initialized) return;
 	
 			let item = Zotero.Items.get(itemID);
 			if (!item) {
