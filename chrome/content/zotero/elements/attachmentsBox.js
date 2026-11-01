@@ -249,7 +249,8 @@
 		}
 
 		updateCount() {
-			if (!this._item?.isRegularItem()) {
+			// A queued item notification can outlive the tab and its section DOM.
+			if (!this.initialized || !this._section || !this._item?.isRegularItem()) {
 				return;
 			}
 			let count = this._item.numAttachments(this.inTrash);

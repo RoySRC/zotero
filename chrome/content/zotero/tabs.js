@@ -29,6 +29,7 @@
 var React = require('react');
 var ReactDOM = require('react-dom');
 import TabBar from 'components/tabBar';
+const { detachedWindowBounds, withTimeout } = require('zotero/tabDrag');
 
 // Reduce loaded tabs limit if the system has 8 GB or less memory.
 // TODO: Revise this after upgrading to Zotero 7
@@ -78,6 +79,9 @@ var Zotero_Tabs = new function () {
 	this._selectedID = 'zotero-pane';
 	this._prevSelectedID = null;
 	this._history = [];
+	// A tab can receive more than one drag-end before a reader finishes loading.
+	// Share one handoff promise per tab instead of opening duplicate windows.
+	this._detachingTabs = new Map();
 	this._focusOptions = {};
 
 	this._loadableTypes = ['reader', 'note'];
@@ -538,6 +542,7 @@ var Zotero_Tabs = new function () {
 				ref={this._tabBarRef}
 				onTabSelect={this.select.bind(this)}
 				onTabMove={this.move.bind(this)}
+				onTabDetach={this.detachTab.bind(this)}
 				onTabClose={this.close.bind(this)}
 				onContextMenu={this._openMenu.bind(this)}
 				onRefocus={this.refocus.bind(this)}
@@ -844,6 +849,156 @@ var Zotero_Tabs = new function () {
 		this._tabs.splice(tabIndex, 1);
 		this._tabs.splice(newIndex, 0, tab);
 		this._update();
+	};
+
+	/**
+	 * Safely detach a built-in reader or note on macOS.
+	 *
+	 * The source is kept alive while its edits are saved and the destination
+	 * initializes. Only a ready destination permits closing the source. Rejected
+	 * promises therefore leave the original tab usable, and the caller can show
+	 * an error. Loading and extension-owned tabs have no supported handoff yet.
+	 * This entry point is separate from the inherited menu hooks so that other
+	 * operating systems and plugin hooks keep their existing behavior.
+	 *
+	 * @param {String} id - Source tab ID, never a library tab
+	 * @param {Object} [point] - Desktop-pixel drop coordinates and destination screen
+	 * @returns {Promise<Boolean>} Whether the tab was detached
+	 */
+	this.detachTab = function (id, point) {
+		if (!Zotero.isMac) return Promise.resolve(false);
+		if (this._detachingTabs.has(id)) return this._detachingTabs.get(id);
+		const { tab } = this._getTab(id);
+		if (!tab || !['reader', 'reader-unloaded', 'note', 'note-unloaded'].includes(tab.type)) {
+			return Promise.resolve(false);
+		}
+		const transfer = this._detachTab(tab, point).finally(() => this._detachingTabs.delete(id));
+		this._detachingTabs.set(id, transfer);
+		return transfer;
+	};
+
+	/**
+	 * Flush pending reader edits before the replacement reads the attachment.
+	 * Annotation edits are debounced inside the bundled reader. Temporarily bypass
+	 * that debounce, wait for writes, and keep the source alive if saving stalls.
+	 * Restore the old setting even on failure, then flush the separate debounce
+	 * for reading position. None of this changes the attachment or annotation IDs.
+	 *
+	 * @param {ReaderInstance} reader - The still-open source tab's reader
+	 */
+	this._flushReaderForTransfer = async function (reader) {
+		await withTimeout(reader._initPromise, 15000);
+		const manager = reader._internalReader._annotationManager;
+		const previous = manager._skipAnnotationSavingDebounce;
+		const deadline = Date.now() + 10000;
+		try {
+			manager._skipAnnotationSavingDebounce = true;
+			while (manager._unsavedAnnotations.size || manager._savingInProgress) {
+				if (Date.now() >= deadline) throw new Error('Timed out saving annotations before detaching the tab');
+				await withTimeout(manager._triggerSaving(), 10000);
+				if (manager._savingInProgress) await Zotero.Promise.delay(20);
+			}
+			await reader._flushState();
+		}
+		finally {
+			manager._skipAnnotationSavingDebounce = previous;
+		}
+	};
+
+	/**
+	 * Perform one handoff. Existing destination windows are reused, never closed
+	 * on failure. A newly created but failed window is cleaned up. A bounded wait
+	 * prevents a broken editor from permanently locking the source tab's handoff.
+	 */
+	this._detachTab = async function (tab, point) {
+		let destination;
+		let destinationWindow;
+		let aborted = false;
+		let committed = false;
+		const isReader = tab.type.startsWith('reader');
+		const existing = isReader
+			? Zotero.Reader._readers.filter(r => !r.tabID)
+			: Zotero.Notes._editorInstances.filter(e => e.viewMode === 'window');
+		// A note API call can complete after the timeout. Its eventual result must
+		// be cleaned up as well; otherwise retrying would leave a surprise window.
+		const closeNewDestination = (instance) => {
+			if (!instance || existing.includes(instance)) return;
+			if (isReader) instance.close();
+			else instance._iframeWindow.top.close();
+		};
+		try {
+			let secondViewState = tab.data.secondViewState;
+			if (isReader) {
+				const source = Zotero.Reader.getByTabID(tab.id);
+				if (source) {
+					await this._flushReaderForTransfer(source);
+					secondViewState = source.getSecondViewState();
+				}
+			}
+			else {
+				// saveSync extracts content synchronously but returns its asynchronous
+				// database write, which must finish before the new editor reads it.
+				await withTimeout(Zotero.Notes.getByTabID(tab.id)?.saveSync(), 15000);
+			}
+			if (this._getTab(tab.id).tab !== tab || window.closed) return false;
+			const opening = isReader
+				? Zotero.Reader.open(tab.data.itemID, null, { openInWindow: true, allowDuplicate: true, secondViewState })
+				: Zotero.Notes.open(tab.data.itemID, null, { openInWindow: true });
+			destination = await withTimeout(opening.then((instance) => {
+				if (aborted) closeNewDestination(instance);
+				return instance;
+			}), 15000);
+			if (!destination) throw new Error('The detached editor did not open');
+			if (isReader) {
+				await withTimeout(destination._openPromise, 15000);
+				// The chrome window can be ready before PDF/EPUB rendering finishes.
+				// A destroyed or failed view resolves false; it is not a replacement
+				// for the original, still-usable tab.
+				const view = destination._internalReader?._primaryView;
+				if (view && await withTimeout(view.initializedPromise, 15000) === false) {
+					throw new Error('The document did not initialize in the detached window');
+				}
+			}
+			destinationWindow = isReader ? destination._window : destination._iframeWindow.top;
+			if (!destinationWindow || destinationWindow.closed) throw new Error('The detached window closed before it was ready');
+			if (this._getTab(tab.id).tab !== tab || window.closed) {
+				closeNewDestination(destination);
+				return false;
+			}
+			if (point?.screen) {
+				// moveTo/resizeTo take CSS pixels in the window's current coordinate
+				// system; display bounds use desktop pixels. On macOS this ratio also
+				// avoids confusing physical Retina pixels with window coordinates.
+				const scale = destinationWindow.devicePixelRatio / destinationWindow.desktopToDeviceScale;
+				const bounds = detachedWindowBounds(point, {
+					width: destinationWindow.outerWidth * scale,
+					height: destinationWindow.outerHeight * scale
+				}, point.screen);
+				destinationWindow.resizeTo(bounds.width / scale, bounds.height / scale);
+				destinationWindow.moveTo(bounds.left / scale, bounds.top / scale);
+			}
+			// A successful move is not a close operation for Undo Close Tab.
+			this.close(tab.id, { skipHistory: true });
+			committed = true;
+			destinationWindow.focus();
+			return true;
+		}
+		catch (error) {
+			// Focus failure after a successful transfer must never close the only
+			// remaining view of the document. Log it and retain the ready window.
+			if (committed) {
+				Zotero.logError(error);
+				return true;
+			}
+			aborted = true;
+			try {
+				closeNewDestination(destination);
+			}
+			catch (cleanupError) {
+				Zotero.logError(cleanupError);
+			}
+			throw error;
+		}
 	};
 
 	/**

@@ -23,7 +23,9 @@ test('publication is isolated, pinned, non-forcing and limited to rebranding', (
 		for (const action of text.matchAll(/uses: ([^\s]+)/g)) {
 			assert.match(action[1], /@[a-f0-9]{40}$/, 'Pin Actions to reviewed commits');
 		}
-		const suites = text.match(/test\/runtests\.sh -f -b ([^\n]+)/)[1].split(' ');
+		// Additional platform-specific jobs must not hide or replace the full
+		// Linux release gate. Inspect that invocation explicitly.
+		const suites = text.match(/xvfb-run -a test\/runtests\.sh -f -b ([^\n]+)/)[1].split(' ');
 		for (const required of ['epilibUpdates', 'epilibBranding', 'epilibSyncIsolation', 'recognitionEngine', 'metadataMenuIcons',
 			'publicationTitleVariant', 'preferences_account', 'storageLocal', 'webdav', 'syncLocal', 'syncEngine', 'syncRunner']) {
 			assert.ok(suites.includes(required), `Missing required suite: ${required}`);
@@ -37,6 +39,17 @@ test('publication is isolated, pinned, non-forcing and limited to rebranding', (
 		assert.ok(text.includes('xvfb-run -a npm run test:desktop --prefix tools/postgresql-sync-server'),
 			'Require the real desktop/PostgreSQL publication-update round trip before publishing');
 	}
+});
+
+test('macOS tab detachment runs against real reader and note windows in CI', () => {
+	const workflow = fs.readFileSync(new URL('../../.github/workflows/epilib-branding.yml', import.meta.url), 'utf8');
+	const job = workflow.split('  macos-tab-detachment:')[1].split('  windows-installer-isolation:')[0];
+	assert.match(job, /runs-on: macos-15/);
+	// Hosted runners have no staged runtime; obtain the Mac runtime before the
+	// native harness builds the app, just as the Linux release gate does.
+	assert.match(job, /app\/scripts\/fetch_xulrunner -p m/);
+	assert.match(job, /node --test js-build\/test\/tab-drag.test.js/);
+	assert.match(job, /test\/runtests.sh -f -b tabDetach tabPaneLifecycle tabs reader noteTab noteeditor/);
 });
 
 test('resource overlay preserves keys, endpoints, namespaces, external services and credits', () => {
