@@ -2252,7 +2252,11 @@ class ReaderWindow extends ReaderInstance {
 			this._switchReaderSubtype(this._type);
 		});
 
-		this._open({ state: options.state, location: options.location, secondViewState: options.secondViewState });
+		// Keep the actual initialization result available to tab tear-off. The
+		// legacy _initPromise only resolves on success and cannot report failures
+		// in file loading. Ordinary callers still receive logged errors.
+		this._openPromise = this._open({ state: options.state, location: options.location, secondViewState: options.secondViewState });
+		this._openPromise.catch(error => Zotero.logError(error));
 	}
 
 	_switchReaderSubtype(subtype) {

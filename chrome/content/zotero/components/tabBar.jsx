@@ -29,6 +29,7 @@ import React, { forwardRef, useState, useRef, useImperativeHandle, useEffect, us
 import PropTypes from 'prop-types';
 import cx from 'classnames';
 const { CSSIcon, CSSItemTypeIcon } = require('./icons');
+const { shouldDetachTab } = require('zotero/tabDrag');
 
 const SCROLL_ARROW_SCROLL_BY = 222;
 
@@ -294,10 +295,46 @@ const TabBar = forwardRef(function (props, ref) {
 		dragIDRef.current = id;
 	}, []);
 	
-	const handleDragEnd = useCallback(() => {
+	/**
+	 * Finish reordering first, then optionally hand the tab to a native window.
+	 * Clear the tracked ID even on cancellation, so stray/duplicate drag-end
+	 * events cannot detach the last tab that happened to be dragged. Read native
+	 * event values synchronously; window creation is asynchronous and React's
+	 * event object must not be retained across that handoff.
+	 */
+	const handleDragEnd = useCallback(async (event) => {
+		const id = dragIDRef.current;
+		dragIDRef.current = null;
+		// The ref is cleared before React's layout effect, so clear the translated
+		// tab explicitly rather than leaving its last drag position on screen.
+		for (const node of tabsRef.current.children) node.style.transform = '';
 		setDragging(false);
+		const nativeEvent = event.nativeEvent;
+		if (shouldDetachTab({ isMac: Zotero.isMac, tabID: id,
+			screenX: event.screenX, screenY: event.screenY,
+			dropEffect: event.dataTransfer?.dropEffect,
+			userCancelled: event.dataTransfer?.mozUserCancelled }, window)) {
+			// Gecko exposes the destination screen on privileged mouse events.
+			// Capture its usable rectangle now, since window.screen describes the
+			// SOURCE monitor and would incorrectly clamp drops onto another display.
+			const scale = window.devicePixelRatio / window.desktopToDeviceScale;
+			const point = { x: event.screenX * scale, y: event.screenY * scale };
+			const screen = nativeEvent?.screen;
+			if (screen) {
+				const left = {}, top = {}, width = {}, height = {};
+				screen.GetAvailRectDisplayPix(left, top, width, height);
+				point.screen = { left: left.value, top: top.value, width: width.value, height: height.value };
+			}
+			try {
+				if (await props.onTabDetach(id, point)) return;
+			}
+			catch (error) {
+				Zotero.logError(error);
+				Zotero.alert(window, Zotero.getString('general.error'), Zotero.getString('tab-detach-error'));
+			}
+		}
 		props.onRefocus();
-	}, [props.onRefocus]);
+	}, [props.onRefocus, props.onTabDetach]);
 
 	const handleTabBarDragOver = useCallback((event) => {
 		event.preventDefault();
@@ -509,6 +546,7 @@ TabBar.propTypes = {
 	onTabClose: PropTypes.func.isRequired,
 	onLoad: PropTypes.func.isRequired,
 	onTabMove: PropTypes.func.isRequired,
+	onTabDetach: PropTypes.func.isRequired,
 	onRefocus: PropTypes.func.isRequired,
 	onContextMenu: PropTypes.func.isRequired,
 	onToggleAudio: PropTypes.func.isRequired,

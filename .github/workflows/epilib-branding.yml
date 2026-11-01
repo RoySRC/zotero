@@ -15,6 +15,31 @@ concurrency:
   group: epilib-branding-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  macos-tab-detachment:
+    # This gesture is intentionally macOS-only. Linux UI checks cannot exercise
+    # its native window lifecycle, so keep a dedicated macOS regression gate.
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Build EpiLib and test tab detachment
+        env:
+          NODE_OPTIONS: --openssl-legacy-provider
+          CI: '1'
+        run: |
+          npm ci
+          node --test js-build/test/tab-drag.test.js
+          app/scripts/fetch_xulrunner -p m
+          npm run build
+          test/runtests.sh -f -b tabDetach tabPaneLifecycle tabs reader noteTab noteeditor
   windows-installer-isolation:
     runs-on: windows-latest
     timeout-minutes: 15
