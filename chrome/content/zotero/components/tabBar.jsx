@@ -30,6 +30,7 @@ import PropTypes from 'prop-types';
 import cx from 'classnames';
 const { CSSIcon, CSSItemTypeIcon } = require('./icons');
 const { shouldDetachTab } = require('zotero/tabDrag');
+const TabDragPreview = require('zotero/tabDragPreview');
 
 const SCROLL_ARROW_SCROLL_BY = 222;
 
@@ -129,6 +130,7 @@ const TabBar = forwardRef(function (props, ref) {
 	const [dragMouseX, setDragMouseX] = useState(0);
 	const [lockedTabsState, setLockedTabsState] = useState(new Map());
 	const dragIDRef = useRef(null);
+	const dragPreviewRef = useRef(null);
 	const dragGrabbedDeltaXRef = useRef();
 	const tabsInnerContainerRef = useRef();
 	const tabsRef = useRef();
@@ -149,6 +151,7 @@ const TabBar = forwardRef(function (props, ref) {
 		props.onLoad();
 		return () => {
 			window.removeEventListener('resize', handleResize);
+			dragPreviewRef.current?.stop();
 		};
 	}, []);
 
@@ -280,11 +283,19 @@ const TabBar = forwardRef(function (props, ref) {
 			return;
 		}
 		event.dataTransfer.effectAllowed = 'move';
-		// We don't want the generated image from the target element,
-		// therefore setting an empty image
-		let img = document.createElement('img');
-		img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-		event.dataTransfer.setDragImage(img, 0, 0);
+		dragPreviewRef.current?.stop();
+		dragPreviewRef.current = null;
+		// Only supported macOS tabs get a detachable preview. Other platforms and
+		// extension-owned tabs keep the inherited in-strip drag behavior.
+		const tab = tabs.find(tab => tab.id === id);
+		if (Zotero.isMac && ['reader', 'reader-unloaded', 'note', 'note-unloaded'].includes(tab?.type)) {
+			dragPreviewRef.current = new TabDragPreview(window, event.currentTarget, event.dataTransfer);
+		}
+		else {
+			const empty = document.createElementNS('http://www.w3.org/1999/xhtml', 'canvas');
+			empty.width = empty.height = 1;
+			event.dataTransfer.setDragImage(empty, 0, 0);
+		}
 		// Some data needs to be set, although this is not used anywhere
 		event.dataTransfer.setData('zotero/tab', id);
 		// Store the relative mouse to tab X position where the tab was grabbed
@@ -293,7 +304,7 @@ const TabBar = forwardRef(function (props, ref) {
 		setDragging(true);
 		// Store the current tab id
 		dragIDRef.current = id;
-	}, []);
+	}, [tabs]);
 	
 	/**
 	 * Finish reordering first, then optionally hand the tab to a native window.
@@ -304,6 +315,9 @@ const TabBar = forwardRef(function (props, ref) {
 	 */
 	const handleDragEnd = useCallback(async (event) => {
 		const id = dragIDRef.current;
+		const preview = dragPreviewRef.current;
+		dragPreviewRef.current = null;
+		preview?.stop({ restore: false });
 		dragIDRef.current = null;
 		// The ref is cleared before React's layout effect, so clear the translated
 		// tab explicitly rather than leaving its last drag position on screen.
@@ -329,10 +343,15 @@ const TabBar = forwardRef(function (props, ref) {
 				if (await props.onTabDetach(id, point)) return;
 			}
 			catch (error) {
+				preview?.restore();
 				Zotero.logError(error);
 				Zotero.alert(window, Zotero.getString('general.error'), Zotero.getString('tab-detach-error'));
 			}
+			finally {
+				preview?.restore();
+			}
 		}
+		preview?.restore();
 		props.onRefocus();
 	}, [props.onRefocus, props.onTabDetach]);
 

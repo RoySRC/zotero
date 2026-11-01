@@ -59,4 +59,29 @@ describe('Tab sidebar teardown', function () {
 		await pane._addItemContext('removed-tab', item.id, 'reader');
 		assert.isNull(pane._getItemContext('removed-tab'));
 	});
+
+	it('stops waiting when a reader tab closes before its frame loads', async function () {
+		const item = await importFileAttachment('test.pdf');
+		const reader = await Zotero.Reader.open(item.id, null, { openInBackground: true });
+		// Closing immediately models a cancelled drag/handoff or window teardown.
+		// The actual chrome frame is removed; a timer must not wait ten seconds
+		// for an iframe that can no longer arrive and report a spurious failure.
+		const waiting = reader._waitForReader();
+		reader.close();
+		assert.isFalse(await Promise.race([
+			waiting,
+			Zotero.Promise.delay(300).then(() => 'still waiting for a closed reader')
+		]));
+		await reader.focus();
+		assert.isNotOk(Zotero.Reader.getByTabID(reader.tabID));
+	});
+
+	it('ignores queued focus for an initialized reader that has just been closed', async function () {
+		const item = await importFileAttachment('test.pdf');
+		const reader = await Zotero.Reader.open(item.id, null, { openInBackground: true });
+		await reader._initPromise;
+		reader.close();
+		assert.isFalse(await reader._waitForReader(), 'A cached initialized flag cannot make a closed frame usable');
+		await reader.focus();
+	});
 });

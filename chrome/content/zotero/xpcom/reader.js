@@ -117,7 +117,9 @@ class ReaderInstance {
 	}
 
 	async focus() {
-		await this._waitForReader();
+		// A queued focus request can outlive a cancelled/closed reader tab.
+		// Cancellation is normal; do not touch a destroyed frame or time out.
+		if (!await this._waitForReader()) return;
 		this._iframeWindow.focus();
 		this._internalReader?.focus();
 	}
@@ -195,7 +197,7 @@ class ReaderInstance {
 		state = state || (await this._getState());
 
 
-		await this._waitForReader();
+		if (!await this._waitForReader()) return false;
 
 		if (this._customEventHandler) {
 			this._iframeWindow.removeEventListener('customEvent', this._customEventHandler);
@@ -1581,19 +1583,32 @@ class ReaderInstance {
 		Object.defineProperty(win.wrappedJSObject, 'console', { value: wrapper });
 	}
 
+	/**
+	 * Wait for the reader chrome frame, unless its owning view has been closed.
+	 * Both callers (focus and _open) must stop on false. In particular, checking
+	 * cancellation before the cached initialized flag prevents stale focus calls
+	 * from reaching a dead iframe. A live view that never loads still raises the
+	 * original timeout: cancellation must not conceal a genuine loading failure.
+	 *
+	 * @returns {Promise<Boolean>} True for a usable frame, false for a closed view
+	 */
 	async _waitForReader() {
+		if (this._isUninitialized || this._isTabClosed) return false;
 		if (this._isReaderInitialized) {
-			return;
+			return true;
 		}
 		let n = 0;
 		while (!this._iframeWindow) {
+			if (this._isUninitialized || this._isTabClosed) return false;
 			if (n >= 1000) {
 				throw new Error('Waiting for reader failed');
 			}
 			await Zotero.Promise.delay(10);
 			n++;
 		}
+		if (this._isUninitialized || this._isTabClosed) return false;
 		this._isReaderInitialized = true;
+		return true;
 	}
 
 	/**
@@ -2044,7 +2059,10 @@ class ReaderTab extends ReaderInstance {
 			}
 		};
 
-		this._open({ location: options.location, secondViewState: options.secondViewState }).then(() => {
+		this._open({ location: options.location, secondViewState: options.secondViewState }).then((opened) => {
+			// The tab can close while _open waits for its frame. Do not register
+			// callbacks on the removed container when initialization was cancelled.
+			if (opened === false || this._isUninitialized || this._isTabClosed) return;
 			this._tabContainer.addEventListener('tab-bottom-placeholder-resize', (event) => {
 				this.setBottomPlaceholderHeight(event.detail.height);
 			});

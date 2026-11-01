@@ -184,6 +184,15 @@
 	&.dragging {
 		z-index: 1;
 	}
+
+	// Keep Gecko's native drag source mounted while removing its tab-strip slot.
+	// display:none/removing the node can lose dragend; a hidden absolute node
+	// preserves the session and lets Escape/re-entry restore the same reader.
+	&[data-drag-preview] {
+		position: absolute;
+		visibility: hidden;
+		pointer-events: none;
+	}
 	
 	&:not(:last-child) {
 		border-inline-end: var(--tab-border);
