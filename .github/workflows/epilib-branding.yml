@@ -39,7 +39,7 @@ jobs:
           node --test js-build/test/tab-drag.test.js
           app/scripts/fetch_xulrunner -p m
           npm run build
-          test/runtests.sh -f -b tabDetach tabPaneLifecycle tabs reader noteTab noteeditor
+          test/runtests.sh -f -b tabDetach tabPaneLifecycle tabs reader readerContextMenu noteTab noteeditor
   windows-installer-isolation:
     runs-on: windows-latest
     timeout-minutes: 15
@@ -114,7 +114,7 @@ jobs:
           app/scripts/fetch_xulrunner -p l
           npm run build
           node --test js-build/test/*.test.js
-          xvfb-run -a test/runtests.sh -f -b epilibUpdates epilibBranding epilibProfileIsolation dataDirectory profile epilibSyncIsolation apiCredentials localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview publicationTitleVariant publicationHyphenation metadataMenuIcons preferences_account storageLocal webdav syncLocal syncEngine syncRunner
+          xvfb-run -a test/runtests.sh -f -b epilibUpdates epilibBranding epilibProfileIsolation dataDirectory profile epilibSyncIsolation apiCredentials localRecognition sharedRecognitionRepository recognitionEngine recognitionProviderKeys recognitionReview publicationTitleVariant publicationHyphenation metadataMenuIcons readerContextMenu preferences_account storageLocal webdav syncLocal syncEngine syncRunner
           xvfb-run -a test/runtests.sh -f -b -g 'standalone PDF by ISBN' recognizeDocument
           xvfb-run -a npm run test:desktop --prefix tools/postgresql-sync-server
           app/scripts/dir_build -p l -f
