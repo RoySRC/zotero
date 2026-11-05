@@ -2,12 +2,15 @@
 
 export var CommandLineOptions = {
 	forceDebugLog: 0,
+	debugFile: false,
 	forceDataDir: false,
 	test: false,
 	automatedTest: false,
 	skipBundledFiles: false,
+	skipFeedUpdates: false,
 	file: false,
 	url: false,
+	deprecatedFlags: [],
 };
 
 export var TestOptions = {
