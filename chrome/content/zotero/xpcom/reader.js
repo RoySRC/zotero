@@ -1347,6 +1347,15 @@ class ReaderInstance {
 		tagsPopup.openPopup(null, 'before_start', x, y, true);
 	}
 
+	/**
+	 * Convert the bundled reader's grouped menu descriptors into a native popup.
+	 * `disabled` is optional in a descriptor: omitted/false means the command is
+	 * available. `checked` describes the selected mode independently of whether
+	 * the user can invoke it (for example, click an active split to turn it off).
+	 *
+	 * @param {Object} params - Reader-relative coordinates and grouped commands.
+	 * @returns {Promise<void>} Resolves after the popup is dismissed and removed.
+	 */
 	async _openContextMenu({ x, y, itemGroups }) {
 		let { resolve, promise } = Zotero.Promise.defer();
 		let popup = this._window.document.createXULElement('menupopup');
@@ -1369,7 +1378,11 @@ class ReaderInstance {
 					else {
 						let menuitem = parentNode.ownerDocument.createXULElement('menuitem');
 						menuitem.setAttribute('label', item.label);
-						menuitem.toggleAttribute('disabled', item.disabled);
+						// Always supply a boolean force argument. Passing undefined to
+						// toggleAttribute() means "toggle", which adds `disabled` to a
+						// new menuitem. Split/zoom commands omit this optional flag and
+						// would therefore be grayed out despite being available.
+						menuitem.toggleAttribute('disabled', !!item.disabled);
 						if (item.color) {
 							menuitem.className = 'menuitem-iconic';
 							menuitem.setAttribute('image', this._getColorIcon(item.color, item.checked));
