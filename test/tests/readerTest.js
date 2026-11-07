@@ -378,60 +378,6 @@ describe("Reader", function () {
 			}
 		});
 
-		for (let failingMethod of ['_createBrowser', '_attachToWindow']) {
-			it(`should preserve the source reader when a window move fails in ${failingMethod}`, async function () {
-				let reader, targetWindow, failure;
-				try {
-					let attachment = await importFileAttachment('test.pdf');
-					reader = await Zotero.Reader.open(attachment.id, null, { window: win });
-					await reader._openPromise;
-					await reader._internalReader._primaryView.initializedPromise;
-					reader._internalReader.toggleVerticalSplit(true);
-					await reader._internalReader._secondaryView.initializedPromise;
-					let sourceID = reader.tabID;
-					let sourceTab = win.Zotero_Tabs._getTab(sourceID).tab;
-					let onClose = sourceTab.onClose;
-					let browser = reader._iframe;
-					let frame = reader._iframeWindow;
-					let popupset = reader._popupset;
-					let secondView = reader._internalReader._secondaryView;
-					frame.wrappedJSObject.transferRollbackMarker = sourceID;
-					targetWindow = await loadZoteroPane();
-					let targetTabs = targetWindow.Zotero_Tabs._tabs.map(tab => tab.id);
-					let original = reader[failingMethod];
-					failure = sinon.stub(reader, failingMethod).callsFake(function (...args) {
-						let result = original.apply(this, args);
-						if (this._window === targetWindow) throw new Error('Reader transfer failed');
-						return result;
-					});
-					assert.throws(() => reader.moveToWindow(targetWindow), /Reader transfer failed/);
-					failure.restore();
-					failure = null;
-					assert.strictEqual(reader._window, win);
-					assert.strictEqual(reader.tabID, sourceID);
-					assert.strictEqual(sourceTab.onClose, onClose);
-					assert.strictEqual(Zotero.Reader.getByTabID(sourceID), reader);
-					assert.strictEqual(reader._iframe, browser);
-					assert.strictEqual(reader._iframeWindow, frame);
-					assert.equal(browser.contentWindow.wrappedJSObject.transferRollbackMarker, sourceID);
-					assert.strictEqual(reader._popupset, popupset);
-					assert.strictEqual(popupset.parentNode, reader._tabContainer);
-					assert.equal(reader._tabContainer.querySelectorAll('popupset').length, 1);
-					assert.strictEqual(reader._internalReader._secondaryView, secondView);
-					assert.equal(reader._internalReader.splitType, 'vertical');
-					assert.isFalse(reader._isTabClosed);
-					assert.isFalse(reader._isUninitialized);
-					assert.deepEqual(targetWindow.Zotero_Tabs._tabs.map(tab => tab.id), targetTabs);
-					await reader.navigate({ pageIndex: 0 });
-				}
-				finally {
-					failure?.restore();
-					await cleanupReaders(reader);
-					targetWindow?.close();
-				}
-			});
-		}
-
 		it('should open with an invalid custom themes setting', async function () {
 			var attachment = await importFileAttachment('test.pdf');
 			// Plugins can write anything to a synced setting

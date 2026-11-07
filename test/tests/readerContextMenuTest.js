@@ -25,7 +25,7 @@ describe('Reader native context menus', function () {
 				reader = await Zotero.Reader.open(attachment.id, null, {
 					openInWindow: view === 'reader-only main window', window: win
 				});
-				await reader._openPromise;
+				await reader._initPromise;
 				internal = reader._internalReader;
 				await internal._primaryView.initializedPromise;
 				if (view === 'moved PDF tab') {

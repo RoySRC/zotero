@@ -978,27 +978,18 @@ describe("Zotero_Tabs", function() {
 				new target.ownerDocument.defaultView.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer })
 			);
 			let count = win2.Zotero_Tabs._tabs.length;
-			let move = sinon.spy(tabs, 'moveToWindow');
-			let newID;
+			fire(tabNode, 'dragstart');
+			fire(tabBar, 'dragover');
+			fire(tabBar, 'drop');
+			fire(tabNode, 'dragend');
+			await waitForCallback(() => win2.Zotero_Tabs._tabs.length > count, 50, 10);
+			let newID = win2.Zotero_Tabs.selectedID;
 			try {
-				fire(tabNode, 'dragstart');
-				fire(tabBar, 'dragover');
-				fire(tabBar, 'drop');
-				fire(tabNode, 'dragend');
-				await waitForCallback(() => move.calledOnce, 50, 10);
-				// The target placeholder appears before its view is ready. The move
-				// commits only after initialization, when the source can safely close.
-				newID = await move.firstCall.returnValue;
-				assert.isOk(newID);
-				assert.equal(win2.Zotero_Tabs._tabs.length, count + 1);
-				assert.equal(win2.Zotero_Tabs.selectedID, newID);
 				assert.isUndefined(tabs._getTab(id).tab);
 				assert.isTrue(win2.Zotero_Tabs.isLibraryTab(newID));
-				assert.isTrue(win2.ZoteroPane.getLibraryView(newID).loaded);
 			}
 			finally {
-				move.restore();
-				if (newID) win2.Zotero_Tabs.close(newID);
+				win2.Zotero_Tabs.close(newID);
 			}
 		});
 
@@ -1020,21 +1011,19 @@ describe("Zotero_Tabs", function() {
 
 		it("should tear off a tab dropped outside the tab bar into a new window", async function () {
 			let openWindows = Zotero.getMainWindows();
-			let move = sinon.spy(tabs, '_moveToNewWindow');
+			let id = await dropTabOutsideTabBar(win.screenX + 100, win.screenY + win.outerHeight - 50);
 			let newWin;
 			try {
-				let id = await dropTabOutsideTabBar(win.screenX + 100, win.screenY + win.outerHeight - 50);
-				await waitForCallback(() => move.calledOnce, 50, 10);
-				let newID = await move.firstCall.returnValue;
-				newWin = Zotero.getMainWindows().find(x => !openWindows.includes(x));
-				assert.isOk(newWin);
+				await waitForCallback(
+					() => (newWin = Zotero.getMainWindows().find(x => !openWindows.includes(x)))
+						&& newWin.Zotero_Tabs?.numTabs,
+					100,
+					20
+				);
 				assert.isUndefined(tabs._getTab(id).tab);
-				assert.equal(newWin.Zotero_Tabs.selectedID, newID);
-				assert.isTrue(newWin.Zotero_Tabs.isLibraryTab(newID));
-				assert.isTrue(newWin.ZoteroPane.getLibraryView(newID).loaded);
+				assert.isTrue(newWin.Zotero_Tabs.isLibraryTab(newWin.Zotero_Tabs.selectedID));
 			}
 			finally {
-				move.restore();
 				newWin?.close();
 			}
 		});

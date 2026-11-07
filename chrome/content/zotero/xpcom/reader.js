@@ -2082,23 +2082,19 @@ class ReaderTab extends ReaderInstance {
 			}
 		};
 
-		this._openPromise = this._open({
+		this._open({
 			state: options.primaryViewState,
 			location: options.location,
 			secondViewState: options.secondViewState
 		}).then((opened) => {
 			// The tab can close while _open waits for its frame. Do not register
 			// callbacks on the removed container when initialization was cancelled.
-			if (opened === false || this._isUninitialized || this._isTabClosed) return false;
+			if (opened === false || this._isUninitialized || this._isTabClosed) return;
 			this._addTabContainerListeners();
 			if (select) {
 				this._updateLayout();
 			}
-			return true;
 		});
-		// Transfer callers need the real loading result; _initPromise only resolves
-		// once a reader is created and cannot report a failure to load its file.
-		this._openPromise.catch(error => Zotero.logError(error));
 	}
 
 	/**
@@ -2125,11 +2121,8 @@ class ReaderTab extends ReaderInstance {
 		// Derive the docShell activity here, because tabs opened in the background, unlike
 		// deselected tabs, don't go through a tab 'select' notification
 		this._updateDocShellActivity();
-		// Reuse the source popup container when a failed transfer is rolled back.
-		if (this._popupset?.parentNode !== this._tabContainer) {
-			this._popupset = this._window.document.createXULElement('popupset');
-			this._tabContainer.appendChild(this._popupset);
-		}
+		this._popupset = this._window.document.createXULElement('popupset');
+		this._tabContainer.appendChild(this._popupset);
 		this._window.addEventListener('pointerdown', this._handlePointerDown);
 		this._window.addEventListener('pointerup', this._handlePointerUp);
 	}
@@ -2161,7 +2154,7 @@ class ReaderTab extends ReaderInstance {
 	 * @return {Boolean}
 	 */
 	canMoveToWindow() {
-		return !!(this._internalReader && this._iframeWindow && !this._isTabClosed && !this._isUninitialized);
+		return !!(this._internalReader && this._iframeWindow && !this._isTabClosed);
 	}
 
 	/**
@@ -2174,68 +2167,33 @@ class ReaderTab extends ReaderInstance {
 	 * @return {String} - The id of the new tab
 	 */
 	moveToWindow(targetWindow, index) {
-		let source = {
-			window: this._window,
-			tabID: this.tabID,
-			container: this._tabContainer,
-			browser: this._iframe,
-			popupset: this._popupset
-		};
-		let { tab } = source.window.Zotero_Tabs._getTab(source.tabID);
-		// Leave onClose unset until the move succeeds: closing this placeholder
-		// must not close the reader that still belongs to the source tab.
+		let { tab } = this._window.Zotero_Tabs._getTab(this.tabID);
 		let { id, container } = targetWindow.Zotero_Tabs.add({
 			type: 'reader',
 			title: tab.title,
 			index,
 			data: JSON.parse(JSON.stringify(tab.data)),
+			onClose: this._handleTabClose,
 			select: false
 		});
-		let swapped = false;
-		try {
-			this._hideReadAloudGuidance();
-			this._detachFromWindow();
-			this._window = targetWindow;
-			this._tabContainer = container;
-			this.tabID = id;
-			this._iframe = this._createBrowser();
-			this._iframe.swapFrameLoaders(source.browser);
-			swapped = true;
-			source.browser.removeEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
-			this._iframe.addEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
-			this._attachToWindow();
-			this._addTabContainerListeners();
-			if (this._readAloudStatus) {
-				targetWindow.Zotero_Tabs.setAudioStatus(id, this._readAloudStatus);
-			}
-			targetWindow.Zotero_Tabs.select(id);
-		}
-		catch (error) {
-			this._detachFromWindow();
-			if (swapped) {
-				this._iframe.swapFrameLoaders(source.browser);
-				this._iframe.removeEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
-				source.browser.addEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
-			}
-			this._window = source.window;
-			this._tabContainer = source.container;
-			this.tabID = source.tabID;
-			this._iframe = source.browser;
-			this._popupset = source.popupset;
-			this._attachToWindow();
-			// Restore ownership before emitting the target tab's close notification,
-			// so Reader.notify() cannot uninitialize the restored source reader.
-			targetWindow.Zotero_Tabs.close(id, {
-				skipHistory: true,
-				skipWindowClose: true,
-				skipFocus: true
-			});
-			this._updateLayout();
-			throw error;
-		}
-		// Only a successful transfer gives the target ownership of the reader.
+		this._hideReadAloudGuidance();
+		this._detachFromWindow();
+		// The old tab closing is no longer this reader's closing
 		tab.onClose = null;
-		targetWindow.Zotero_Tabs._getTab(id).tab.onClose = this._handleTabClose;
+		let oldBrowser = this._iframe;
+		this._window = targetWindow;
+		this._tabContainer = container;
+		this.tabID = id;
+		this._iframe = this._createBrowser();
+		this._iframe.swapFrameLoaders(oldBrowser);
+		oldBrowser.removeEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
+		this._iframe.addEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
+		this._attachToWindow();
+		this._addTabContainerListeners();
+		if (this._readAloudStatus) {
+			targetWindow.Zotero_Tabs.setAudioStatus(id, this._readAloudStatus);
+		}
+		targetWindow.Zotero_Tabs.select(id);
 		return id;
 	}
 

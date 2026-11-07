@@ -1394,5 +1394,3 @@ epilib-updates-development = This is a development build. Latest EpiLib release:
 epilib-updates-unavailable = The EpiLib update feed is unavailable. Check your connection or visit the release page. A public release may not have been published yet.
 
 local-api-authorize-text = “{ $appName }”, an application running on your computer, wants to modify your { -app-name } library.
-## Moving a reader or note tab into a separate macOS window
-tab-detach-error = EpiLib could not open this tab in a new window. Your original tab has been kept open. Please try again.
