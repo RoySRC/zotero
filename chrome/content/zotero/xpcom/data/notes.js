@@ -43,10 +43,10 @@ Zotero.Notes = new function () {
 	 * @returns {Promise<Zotero.EditorInstance | null>} Instance of Zotero.EditorInstance for the note.
 	 * If the note tab is opened in background (unloaded), returns null.
 	 */
-	this.open = async function (itemID, location, { title, tabIndex, tabID, openInBackground, openInWindow, allowDuplicate, preventJumpback, parentItemKey } = {}) {
+	this.open = async function (itemID, location, { title, tabIndex, tabID, openInBackground, openInWindow, allowDuplicate, preventJumpback, parentItemKey, window: ownerWindow } = {}) {
 		let { libraryID } = Zotero.Items.getLibraryAndKeyFromID(itemID);
 		let library = Zotero.Libraries.get(libraryID);
-		let win = Zotero.getMainWindow();
+		let win = ownerWindow || Zotero.getMainWindow();
 
 		if (!win) {
 			openInWindow = true;
@@ -71,10 +71,14 @@ Zotero.Notes = new function () {
 
 		if (!allowDuplicate) {
 			if (openInWindow) {
-				editorInstance = this._editorInstances.find(r => r.itemID === itemID && r.viewMode === 'window');
+				// A tab for the note in any window stands in for a window of its own
+				editorInstance = this._editorInstances.find(r => r.itemID === itemID && r.viewMode === 'tab');
 			}
 			else {
-				editorInstance = this._editorInstances.find(r => r.itemID === itemID && r.viewMode === 'tab');
+				// A tab is only a duplicate of another tab in the same window
+				editorInstance = this._editorInstances.find(
+					r => r.itemID === itemID && r.viewMode === 'tab' && r._window === win
+				);
 			}
 		}
 
@@ -85,7 +89,9 @@ Zotero.Notes = new function () {
 				// Wait for the note editor to load
 				let timeout = 3000;
 				for (let i = 0; i < timeout; i += 100) {
-					editorInstance = this._editorInstances.find(r => r.itemID === itemID && r.viewMode === 'tab');
+					editorInstance = this._editorInstances.find(
+						r => r.itemID === itemID && r.viewMode === 'tab' && r._window === win
+					);
 					if (editorInstance) {
 						return editorInstance;
 					}
@@ -98,11 +104,9 @@ Zotero.Notes = new function () {
 		}
 
 		if (editorInstance) {
+			editorInstance._window.Zotero_Tabs.select(editorInstance.tabID, true);
 			if (openInWindow) {
-				editorInstance.focus();
-			}
-			else {
-				win.Zotero_Tabs.select(editorInstance.tabID, true);
+				editorInstance._window.focus();
 			}
 			
 			if (location) {
@@ -113,84 +117,87 @@ Zotero.Notes = new function () {
 		}
 
 		if (openInWindow) {
-			let name = null;
-		
-			if (itemID) {
-				// Create a name for this window so we can focus it later
-				name = 'zotero-note-' + itemID;
-			}
+			// The new window selects and focuses its note tab as it opens
+			return this._openInNewWindow(item, title);
+		}
 
-			let io = { itemID, parentItemKey, location, _initPromise: Zotero.Promise.defer() };
-			Services.ww.openWindow(
-				win,
-				'chrome://zotero/content/note.xhtml',
-				name,
-				'chrome,resizable,centerscreen,dialog=no',
-				io
-			);
-			await io._initPromise.promise;
-			noteEditor = io.noteEditor;
+		let id;
+		let container;
+		let select = !openInBackground;
+		if (tabID) {
+			id = tabID;
+			container = win.document.getElementById(tabID);
+			noteEditor = container.querySelector('note-editor.note-tab');
 		}
 		else {
-			let id;
-			let container;
-			let select = !openInBackground;
-			if (tabID) {
-				id = tabID;
-				container = win.document.getElementById(tabID);
-				noteEditor = container.querySelector('note-editor.note-tab');
-			}
- 			else {
-				({ id, container } = win.Zotero_Tabs.add({
-					id: tabID,
-					type: 'note-unloaded',
-					title,
-					index: tabIndex,
-					data: {
-						itemID,
-					},
-					select,
-					preventJumpback,
-				}));
-			}
+			({ id, container } = win.Zotero_Tabs.add({
+				id: tabID,
+				type: 'note-unloaded',
+				title,
+				index: tabIndex,
+				data: {
+					itemID,
+				},
+				select,
+				preventJumpback,
+			}));
+		}
 
-			if (openInBackground) {
-				return null;
-			}
+		if (openInBackground) {
+			return null;
+		}
 
-			if (!noteEditor) {
-				noteEditor = win.document.createXULElement('note-editor');
-				noteEditor.classList.add('note-tab');
-				container.appendChild(noteEditor);
+		if (!noteEditor) {
+			noteEditor = win.document.createXULElement('note-editor');
+			noteEditor.classList.add('note-tab');
+			container.appendChild(noteEditor);
 
-				noteEditor.mode = item.isEditable() ? 'edit' : 'view';
-				noteEditor.viewMode = 'tab';
-				noteEditor.item = item;
-				noteEditor.tabID = id;
-				noteEditor._id('links-container').hidden = true;
+			noteEditor.mode = item.isEditable() ? 'edit' : 'view';
+			noteEditor.viewMode = 'tab';
+			noteEditor.item = item;
+			noteEditor.tabID = id;
+			noteEditor._id('links-container').hidden = true;
 
-				container.addEventListener('tab-bottom-placeholder-resize', (event) => {
-					this.setBottomPlaceholderHeight(noteEditor, event.detail.height);
-				});
+			container.addEventListener('tab-bottom-placeholder-resize', (event) => {
+				this.setBottomPlaceholderHeight(noteEditor, event.detail.height);
+			});
 
-				container.addEventListener('tab-context-pane-toggle', (event) => {
-					this.setContextPaneOpen(noteEditor, event.detail.open);
-				});
+			container.addEventListener('tab-context-pane-toggle', (event) => {
+				this.setContextPaneOpen(noteEditor, event.detail.open);
+			});
 
-				container.addEventListener('tab-selection-change', (event) => {
-					if (event.detail.selected) {
-						this._updateLayout();
-					}
-				});
-			}
+			container.addEventListener('tab-selection-change', (event) => {
+				if (event.detail.selected) {
+					this._updateLayout(win);
+				}
+			});
+		}
 
-			if (select) {
-				this._updateLayout();
-				noteEditor.focus();
-			}
+		if (select) {
+			this._updateLayout(win);
+			noteEditor.focus();
 		}
 		await noteEditor._initPromise;
 		return noteEditor._editorInstance;
+	};
+	
+	/**
+	 * Open a main window whose only tab is a note tab for an item, and wait for its editor
+	 *
+	 * @param {Zotero.Item} item
+	 * @param {String} [title]
+	 * @return {Promise<Zotero.EditorInstance|undefined>}
+	 */
+	this._openInNewWindow = async function (item, title) {
+		let win = Zotero.openMainWindow({
+			noteTabState: { itemID: item.id, title: title || item.getNoteTitle() }
+		});
+		await new Promise(resolve => win.addEventListener('load', resolve, { once: true }));
+		await win.ZoteroPane.loadedPromise;
+		await win.Zotero_Tabs.getLoadPromise(win.Zotero_Tabs.selectedID);
+		return this._editorInstances.find(
+			r => r.itemID === item.id && r.viewMode === 'tab' && r._window === win
+		);
 	};
 
 	this.setBottomPlaceholderHeight = function (noteEditor, height) {
@@ -209,8 +216,8 @@ Zotero.Notes = new function () {
 		noteEditor.setContextPaneOpen(open);
 	};
 
-	this._updateLayout = function () {
-		let win = Zotero.getMainWindow();
+	this._updateLayout = function (win) {
+		win = win || Zotero.getMainWindow();
 		win.ZoteroContextPane.update();
 		let { sidebarState } = win.Zotero_Tabs.updateSidebarLayout();
 		this.toggleSidebar(sidebarState.open);

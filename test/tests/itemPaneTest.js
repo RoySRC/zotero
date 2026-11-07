@@ -68,7 +68,7 @@ describe("Item pane", function () {
 	
 	after(function () {
 		Zotero_Tabs.select("zotero-pane");
-		Zotero_Tabs.closeAll();
+		closeItemTabs(win);
 		win.close();
 	});
 
@@ -878,11 +878,60 @@ describe("Item pane", function () {
 			}
 
 			Zotero_Tabs.select("zotero-pane");
-			Zotero_Tabs.closeAll();
+			closeItemTabs(win);
 		});
 
 		after(function () {
 			win.resizeTo(1000, 800);
+		});
+
+		it("should keep attachments trash state scoped to the owning library tab", async function () {
+			let item = await createDataObject('item');
+			let deletedItem = await createDataObject('item', { deleted: true });
+			let otherTabID;
+			try {
+				await selectTrash(win);
+				await ZoteroPane.selectItem(deletedItem.id);
+				let trashBox = ZoteroPane.itemPane._itemDetails.getPane(paneID);
+				assert.isTrue(trashBox.inTrash);
+
+				otherTabID = Zotero_Tabs.addLibraryTab({
+					state: { collections: ['L' + Zotero.Libraries.userLibraryID] }
+				});
+				await Zotero_Tabs.getLoadPromise(otherTabID);
+				await ZoteroPane.selectItem(item.id);
+				let libraryBox = ZoteroPane.itemPane._itemDetails.getPane(paneID);
+				assert.notStrictEqual(libraryBox, trashBox);
+				assert.isFalse(libraryBox.inTrash);
+				assert.isTrue(trashBox.inTrash);
+
+				Zotero_Tabs.select('zotero-pane');
+				assert.isTrue(ZoteroPane.collectionsView.selectedTreeRow.isTrash());
+				assert.isFalse(libraryBox.inTrash);
+			}
+			finally {
+				Zotero_Tabs.select('zotero-pane');
+				if (otherTabID) Zotero_Tabs.close(otherTabID);
+				await selectLibrary(win);
+			}
+		});
+
+		it("should read attachments trash state before the active collection tree initializes", function () {
+			let box = doc.createXULElement('attachments-box');
+			box.tabType = 'library';
+			let tree = sinon.stub(ZoteroPane, 'collectionsView').get(() => null);
+			try {
+				assert.isFalse(box.inTrash);
+				box.collectionTreeRows = [];
+				assert.isFalse(box.inTrash);
+				box.collectionTreeRows = [new Zotero.CollectionTreeRow(null, 'trash')];
+				assert.isTrue(box.inTrash);
+				box.tabType = 'reader';
+				assert.isFalse(box.inTrash);
+			}
+			finally {
+				tree.restore();
+			}
 		});
 
 		it("should show attachments pane in library for regular item", async function () {
@@ -1705,7 +1754,7 @@ describe("Item pane", function () {
 			}
 
 			Zotero_Tabs.select("zotero-pane");
-			Zotero_Tabs.closeAll();
+			closeItemTabs(win);
 		});
 
 		it("should refresh on file rename", async function () {
@@ -2197,7 +2246,7 @@ describe("Item pane", function () {
 		it("should switch to the correct pane when switching tabs", async function () {
 			// https://github.com/zotero/zotero/issues/4531#issuecomment-2470874876
 			let attachment = await importFileAttachment('test.pdf');
-			Zotero_Tabs.closeAll();
+			closeItemTabs(win);
 			Zotero_Tabs.add({
 				type: 'reader-unloaded',
 				title: "Reader",
@@ -2224,7 +2273,7 @@ describe("Item pane", function () {
 
 		afterEach(function () {
 			Zotero_Tabs.select("zotero-pane");
-			Zotero_Tabs.closeAll();
+			closeItemTabs(win);
 		});
 
 		it("should scroll to pinned pane after selection moves from note to item", async function () {

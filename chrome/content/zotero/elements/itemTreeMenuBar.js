@@ -108,15 +108,19 @@ class ItemTreeMenuBar extends XULElement {
 	}
 
 	// Set the access keys for menuitems to sort the itemTree
+	//
+	// itemsView can be a function, resolved when a key fires, so that the keys always
+	// act on the current view
 	static setItemTreeSortKeys(itemsView) {
+		let getItemsView = typeof itemsView == 'function' ? itemsView : () => itemsView;
 		let sortSubmenuKeys = document.getElementById('sortSubmenuKeys');
 		for (let i = 0; i < 10; i++) {
 			let key = sortSubmenuKeys.children[i];
 			key.setAttribute('modifiers', Zotero.isMac ? 'accel alt control' : 'alt');
 			key.setAttribute('key', (i + 1) % 10);
 			key.addEventListener('command', () => {
-				if (!window.Zotero_Tabs || window.Zotero_Tabs.selectedType == 'library') {
-					itemsView.toggleSort(i, true);
+				if (!window.Zotero_Tabs || window.Zotero_Tabs.selectedIsLibrary) {
+					getItemsView()?.toggleSort(i, true);
 				}
 			});
 		}

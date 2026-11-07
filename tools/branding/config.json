@@ -23,7 +23,8 @@
     { "pattern": "[\\w./-]*\\/Zotero(?:[\\/\\w.-]*)", "reason": "Existing profile and filesystem paths" }
   ],
   "referenceExceptions": [
-    { "file": "chrome/content/zotero/xpcom/error.js", "value": "Zotero Error", "reason": "Cross-window error dispatch identifier used by sync; not a display label" }
+    { "file": "chrome/content/zotero/xpcom/error.js", "value": "Zotero Error", "reason": "Cross-window error dispatch identifier used by sync; not a display label" },
+    { "file": "chrome/content/zotero/standalone/hiddenWindow.xhtml", "value": "const { Zotero } = ChromeUtils.importESModule('chrome://zotero/content/zotero.mjs');", "reason": "Inline JavaScript imports the compatible Zotero namespace for new-window commands; this is not a display label" }
   ],
   "literalOverrides": {
     "resource/config.mjs": [["CLIENT_NAME: 'Zotero'", "CLIENT_NAME: '{product}'"], ["DATA_DIRECTORY_NAME: 'Zotero'", "DATA_DIRECTORY_NAME: '{product}'"]],

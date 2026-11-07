@@ -64,6 +64,8 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 		dragAndDrop: PropTypes.bool,
 		filterLibraryIDs: PropTypes.array,
 		hideSources: PropTypes.array,
+		// DOM id of the tree
+		id: PropTypes.string,
 		multiSelect: PropTypes.bool,
 		onContextMenu: PropTypes.func,
 	};
@@ -74,7 +76,7 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 
 		this.type = 'collection';
 		this.name = "CollectionTree";
-		this.id = "collection-tree";
+		this.id = props.id || "collection-tree";
 		this._rows = [];
 		this._rowMap = {};
 		this._highlightedRows = new Set();
@@ -303,7 +305,6 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 		treeRow.ref.name = treeRow.editingName;
 		delete treeRow.editingName;
 		await treeRow.ref.saveTx({ undoAction: 'undo-action-rename-collection' });
-		window.Zotero_Tabs.rename("zotero-pane", treeRow.ref.name);
 	}
 	
 	startEditing = (treeRow) => {
@@ -459,7 +460,8 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 
 		// Drag-and-drop stuff
 		if (this.props.dragAndDrop) {
-			div.setAttribute('draggable', treeRow != this._editing);
+			div.setAttribute('draggable', treeRow != this._editing
+				&& (treeRow.isCollection() || treeRow.isSearch()));
 		}
 		if (!oldDiv) {
 			if (this.props.dragAndDrop) {
@@ -512,6 +514,8 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 				requireSelection: true,
 
 				onItemContextMenu: (...args) => this.props.onContextMenu && this.props.onContextMenu(...args),
+				// A context menu on an unselected row applies to that row without selecting it
+				skipContextMenuSelection: true,
 
 				onKeyDown: this.handleKeyDown,
 				onActivate: (...args) => (this.props.onActivate ? this.props.onActivate(...args) : this.handleActivate(...args)),
@@ -629,6 +633,8 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 				}
 			}
 		} catch (e) {
+			// Ignore errors from a tree torn down while it refreshes
+			if (this._uninitialized || !this.domEl.isConnected) return;
 			Zotero.logError(e);
 			window.ZoteroPane.displayErrorMessage();
 		}
@@ -644,31 +650,47 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 		this.tree.invalidate();
 	}
 	
-	async selectByID(id, ensureRowVisible = true) {
-		var type = id[0];
-		id = parseInt(('' + id).substr(1));
+	/**
+	 * Expand the tree as necessary to show a row
+	 *
+	 * @param {String} id - A collection tree row id
+	 * @return {Promise<Integer|false>} - The row index, or false if the row isn't in the tree
+	 */
+	async _expandToID(id) {
+		var objectID = parseInt(('' + id).substr(1));
 		
-		switch (type) {
-		case 'L':
-			return this.selectLibrary(id);
-		
-		case 'C':
-			await this.expandToCollection(id);
-			break;
-		
-		case 'S':
-			var search = await Zotero.Searches.getAsync(id);
-			await this.expandLibrary(search.libraryID);
-			break;
-		
-		case 'D':
-		case 'U':
-		case 'T':
-			await this.expandLibrary(id);
-			break;
+		switch (id[0]) {
+			case 'C':
+				await this.expandToCollection(objectID);
+				break;
+			
+			case 'S': {
+				let search = await Zotero.Searches.getAsync(objectID);
+				if (search) {
+					await this.expandLibrary(search.libraryID);
+				}
+				break;
+			}
+			
+			case 'D':
+			case 'U':
+			case 'T':
+			case 'Y':
+			case 'R':
+			case 'P':
+				await this.expandLibrary(objectID);
+				break;
 		}
 		
-		var row = this.getRowIndexByID(type + id);
+		return this.getRowIndexByID(id);
+	}
+	
+	async selectByID(id, ensureRowVisible = true) {
+		if (id[0] == 'L') {
+			return this.selectLibrary(parseInt(('' + id).substr(1)));
+		}
+		
+		var row = await this._expandToID(id);
 		if (row === false) {
 			return false;
 		}
@@ -678,6 +700,77 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 		await this.selectWait(row);
 		
 		return true;
+	}
+	
+	/**
+	 * Reapply a saved selection, expanding the tree as necessary
+	 *
+	 * @param {String[]} ids - Collection tree row ids
+	 * @param {Object} [options]
+	 * @param {String} [options.focusedID] - The row to focus, if it's among the selected rows
+	 * @param {Number} [options.scrollTop] - Scroll position to restore before making the
+	 *     focused row visible
+	 * @return {Promise<Boolean>} - True if at least one row was selected
+	 */
+	async restoreSelection(ids, { focusedID, scrollTop } = {}) {
+		var indexes = [];
+		for (let id of ids || []) {
+			let index = await this._expandToID(id);
+			if (index !== false && !indexes.includes(index)) {
+				indexes.push(index);
+			}
+		}
+		if (!indexes.length) {
+			return false;
+		}
+		indexes.sort((a, b) => a - b);
+		
+		var focusedIndex = focusedID ? this.getRowIndexByID(focusedID) : false;
+		if (focusedIndex === false || !indexes.includes(focusedIndex)) {
+			focusedIndex = indexes[0];
+		}
+		
+		var promise = this.waitForSelect();
+		var unsuppress = false;
+		if (!this.selection.selectEventsSuppressed) {
+			unsuppress = this.selection.selectEventsSuppressed = true;
+		}
+		try {
+			this.selection.select(indexes[0]);
+			for (let index of indexes.slice(1)) {
+				this.selection.toggleSelect(index);
+			}
+			this.selection.focused = focusedIndex;
+			this.selection.pivot = focusedIndex;
+		}
+		finally {
+			if (unsuppress) {
+				this.selection.selectEventsSuppressed = false;
+			}
+		}
+		
+		if (typeof scrollTop == 'number') {
+			let collectionTable = this.domEl.querySelector('.virtualized-table');
+			if (collectionTable) {
+				collectionTable.scrollTop = scrollTop;
+			}
+		}
+		this.ensureRowIsVisible(focusedIndex);
+		
+		if (unsuppress) {
+			await promise;
+		}
+		return true;
+	}
+	
+	/**
+	 * Get the current scroll position, for passing to restoreSelection()
+	 *
+	 * @return {Number}
+	 */
+	getScrollPosition() {
+		let collectionTable = this.domEl.querySelector('.virtualized-table');
+		return collectionTable ? collectionTable.scrollTop : 0;
 	}
 	
 	/**
@@ -1335,7 +1428,16 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 		let treeViewID = types[type] + libraryID;
 		
 		Zotero.Prefs.setVirtualCollectionStateForLibrary(libraryID, type, show);
-		
+
+		for (let win of Zotero.getMainWindows()) {
+			for (let view of win.ZoteroPane.libraryViews) {
+				if (view.loaded && view.collectionsView && view.collectionsView !== this) {
+					view.collectionsView.updateVirtualCollection(treeViewID)
+						.catch(e => Zotero.logError(e));
+				}
+			}
+		}
+
 		var promise = this.waitForSelect();
 		var selectedRow = this.selection.focused;
 		var selectedRowID = this.getRow(selectedRow).id;
@@ -1354,18 +1456,39 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 			await this.selectWait(this.selection.focused);
 		}
 		this.selection.selectEventsSuppressed = false;
-		
+
 		return promise;
+	}
+
+	/**
+	 * Show or hide a virtual collection toggled in another tree, keeping this tree's selection
+	 *
+	 * @param {String} treeViewID
+	 * @return {Promise}
+	 */
+	async updateVirtualCollection(treeViewID) {
+		var selectedIDs = [...this.selection.selected].map(index => this.getRow(index)?.id);
+		var focusedID = this.getRow(this.selection.focused)?.id;
+		var scrollTop = this.getScrollPosition();
+
+		// refresh() suppresses select events, so the rows are reselected before the items view
+		// sees the selection
+		await this.refresh();
+		if (!await this.restoreSelection(selectedIDs, { focusedID, scrollTop })) {
+			this.selection.select(this.getRowIndexByID('L' + treeViewID.substr(1)));
+		}
+		this.tree.invalidate();
+		this.selection.selectEventsSuppressed = false;
 	}
 
 	/**
 	 * Deletes the selected collection and optionally items within it
 	 *
 	 * @param deleteItems[boolean] Whether items contained in the collection should be removed
+	 * @param {CollectionTreeRow[]} [treeRows] - Rows to delete instead of the selected rows
 	 * @returns {Promise<void>}
 	 */
-	async deleteSelection(deleteItems) {
-		let treeRows = this.getSelectedRows();
+	async deleteSelection(deleteItems, treeRows = this.getSelectedRows()) {
 		// Feeds must be erased outside a transaction since Feed.erase()
 		// starts its own transaction internally
 		let feeds = treeRows.filter(r => r.isFeed());
@@ -1593,8 +1716,8 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 			event.dataTransfer.effectAllowed = 'copyMove';
 		}
 		
-		let rows = this.getSelectedRows();
-		// Ignore drag if all selected rows aren't the same type
+		let rows = this._dragIndices.map(i => this.getRow(i));
+		// Ignore drag if all dragged rows aren't the same type
 		if (!rows.every(o => o.type == rows[0].type)) {
 			return;
 		}
@@ -1722,7 +1845,7 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 				// And everything else is a move
 				this.setDropEffect(event, "move");
 			}
-			else if (event.dataTransfer.types.includes("application/x-moz-file")) {
+			else if (event.dataTransfer.types.includes("Files")) {
 				// As of Aug. 2013 nightlies:
 				//
 				// - Setting the dropEffect only works on Linux and OS X.
@@ -2410,6 +2533,10 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 						await droppedCollection.save({ undoAction: 'undo-action-move-collection' });
 					}
 				});
+				// Reveal the moved collections in their new location
+				for (let droppedCollection of droppedCollections) {
+					await this.expandToCollection(droppedCollection.id);
+				}
 			}
 		}
 		else if (dataType == 'zotero/item') {
@@ -2436,7 +2563,7 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 				let promises = [];
 				for (let item of items) {
 					// No transaction, because most time is spent traversing urls
-					promises.push(item.translate(targetLibraryID, targetCollectionID))
+					promises.push(item.translate(targetLibraryID, targetCollectionID, { window }));
 				}
 				return Zotero.Promise.all(promises);	
 			}
@@ -2905,7 +3032,7 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 	 * @param {Bool} focusTree - Focus the collection tree after the filtering is complete
 	 */
 	async setFilter(filterText, focusTree = false) {
-		let collectionTable = document.getElementById("collection-tree").firstElementChild;
+		let collectionTable = this.domEl.querySelector(`#${this.id}`).firstElementChild;
 		let isEmpty = this._isFilterEmpty();
 		let willBeEmpty = filterText.length == 0;
 		this._filter = Zotero.Utilities.Internal.normalizeForSearch(filterText);
@@ -3021,14 +3148,16 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 	}
 
 	clearFilter() {
+		let libraryView = this.domEl.closest('library-view');
+		let collectionsSearchField = libraryView.getElement('zotero-collections-search');
 		// Clear the search field
 		if (collectionsSearchField.value.length) {
 			collectionsSearchField.value = '';
-			ZoteroPane.handleCollectionSearchInput();
+			libraryView.handleCollectionSearchInput();
 			return null;
 		}
 		// If the search field is empty, focus the collection tree
-		return document.getElementById('collection-tree');
+		return libraryView.getElement(this.id);
 	}
 
 	/**

@@ -1,18 +1,19 @@
 /* global describe, before, after, beforeEach, afterEach, it, assert, sinon,
- loadZoteroPane, importFileAttachment, waitForCallback, createDataObject, getPromiseError, dump */
+ loadZoteroPane, importFileAttachment, waitForCallback, createDataObject, getPromiseError, closeItemTabs, dump */
 /*
  * macOS tab tear-off regression/integration tests. The real React tab bar and
- * real PDF/note windows run in the test runner's disposable profile. Synthetic
+ * real PDF/note main-window tabs run in the test runner's disposable profile. Synthetic
  * drag events exercise the production event wiring without driving the user's
  * mouse. Native mouse-drag smoke testing complements these deterministic tests.
  */
 describe('macOS tab detachment', function () {
-	let win, tabs, sandbox, alerts, loggedErrors;
+	let win, tabs, sandbox, alerts, loggedErrors, originalWindows;
 
 	before(async function () {
 		if (!Zotero.isMac) this.skip();
 		win = await loadZoteroPane();
 		tabs = win.Zotero_Tabs;
+		originalWindows = Zotero.getMainWindows();
 	});
 
 	beforeEach(function () {
@@ -26,13 +27,10 @@ describe('macOS tab detachment', function () {
 
 	afterEach(async function () {
 		sandbox.restore();
-		for (const reader of [...Zotero.Reader._readers]) {
-			if (!reader.tabID) reader.close();
+		for (const other of Zotero.getMainWindows()) {
+			if (!originalWindows.includes(other)) other.close();
 		}
-		for (const editor of [...Zotero.Notes._editorInstances]) {
-			if (editor.viewMode === 'window') editor._iframeWindow.top.close();
-		}
-		tabs.closeAll();
+		closeItemTabs(win);
 		await Zotero.Promise.delay(100);
 	});
 
@@ -43,7 +41,7 @@ describe('macOS tab detachment', function () {
 	/** Open a genuine PDF and wait for its tab to appear in React's DOM. */
 	async function openPDF(filename = 'test.pdf') {
 		const attachment = await importFileAttachment(filename);
-		const reader = await Zotero.Reader.open(attachment.id);
+		const reader = await Zotero.Reader.open(attachment.id, null, { window: win });
 		await reader._initPromise;
 		await reader._internalReader._primaryView.initializedPromise;
 		await waitForCallback(() => win.document.querySelector(`.tab[data-id="${reader.tabID}"]`));
@@ -80,7 +78,7 @@ describe('macOS tab detachment', function () {
 		dt.dropEffect = dropEffect;
 		node.dispatchEvent(new win.DragEvent('dragend', { bubbles: true, dataTransfer: dt,
 			screenX: outside ? win.screenX + win.outerWidth + 100 : win.screenX + 100,
-			screenY: win.screenY + 100 }));
+			screenY: outside ? win.screenY + 100 : win.mozInnerScreenY + 15 }));
 	}
 
 	/**
@@ -238,33 +236,35 @@ describe('macOS tab detachment', function () {
 	it('a failed drop restores the preview-hidden source after the handoff promise rejects', async function () {
 		const { reader } = await openPDF();
 		const opening = Zotero.Promise.defer();
-		const open = sandbox.stub(Zotero.Reader, 'open').returns(opening.promise);
+		const open = sandbox.stub(tabs, '_moveToNewWindow').returns(opening.promise);
 		const gesture = beginPreviewDrag(reader.tabID);
 		gesture.move(true);
 		gesture.end({ cancelled: false });
 		await waitForCallback(() => open.called);
 		assert.equal(win.getComputedStyle(gesture.node).visibility, 'hidden', 'No source-tab flash during handoff');
-		opening.reject(new Error('test: detached preview destination failed'));
+		opening.reject(new Error('test: destination failed'));
 		await waitForCallback(() => alerts.length);
 		assert.equal(win.getComputedStyle(gesture.node).visibility, 'visible');
 		assert.strictEqual(Zotero.Reader.getByTabID(reader.tabID), reader);
 	});
 
-	it('dragging a PDF outside opens a reader window and removes only its original tab', async function () {
-		const { attachment, reader } = await openPDF();
-		drag(reader.tabID);
-		await waitForCallback(() => alerts.length || Zotero.Reader._readers.some(r => r.itemID === attachment.id && !r.tabID), 50, 5);
+	it('dragging a PDF outside moves its live document into a new main window', async function () {
+		const { reader } = await openPDF();
+		const sourceID = reader.tabID;
+		const document = reader._internalReader;
+		drag(sourceID);
+		await waitForCallback(() => alerts.length || reader._window !== win, 50, 5);
 		assert.isEmpty(alerts, String(loggedErrors.lastCall?.args[0]?.stack || loggedErrors.lastCall?.args[0]));
-		const destination = Zotero.Reader._readers.find(r => r.itemID === attachment.id && !r.tabID);
-		await destination._initPromise;
-		await waitForCallback(() => !tabs._getTab(reader.tabID).tab);
-		assert.isFalse(destination._window.closed);
+		assert.isNotOk(tabs._getTab(sourceID).tab);
+		assert.isOk(reader._window.Zotero_Tabs._getTab(reader.tabID).tab);
+		assert.strictEqual(reader._internalReader, document);
+		assert.isFalse(reader._window.closed);
 		assert.isOk(tabs._getTab('zotero-pane').tab);
 	});
 
-	it('cancelled, internal, accepted, foreign, and duplicate drag-end events never open windows', async function () {
+	it('cancelled, tab-bar, accepted, foreign, and duplicate drag-end events never open windows', async function () {
 		const { reader } = await openPDF();
-		const open = sandbox.spy(Zotero.Reader, 'open');
+		const open = sandbox.spy(Zotero, 'openMainWindow');
 		for (const options of [{ cancelled: true }, { outside: false }, { dropEffect: 'move' }, { start: false }]) {
 			drag(reader.tabID, options);
 		}
@@ -275,12 +275,14 @@ describe('macOS tab detachment', function () {
 
 	it('window-opening failure keeps the source tab and permits a later retry', async function () {
 		const { reader } = await openPDF();
-		const open = sandbox.stub(Zotero.Reader, 'open').rejects(new Error('test: window open failed'));
-		assert.include((await getPromiseError(tabs.detachTab(reader.tabID))).message, 'window open failed');
-		assert.isOk(tabs._getTab(reader.tabID).tab);
-		assert.strictEqual(Zotero.Reader.getByTabID(reader.tabID), reader);
+		const sourceID = reader.tabID;
+		const open = sandbox.stub(Zotero, 'openMainWindow').throws(new Error('test: window open failed'));
+		assert.include((await getPromiseError(tabs._moveToNewWindow(sourceID))).message, 'window open failed');
+		assert.isOk(tabs._getTab(sourceID).tab);
+		assert.strictEqual(Zotero.Reader.getByTabID(sourceID), reader);
 		open.restore();
-		assert.isTrue(await tabs.detachTab(reader.tabID));
+		assert.isOk(await tabs._moveToNewWindow(sourceID));
+		assert.notEqual(reader._window, win);
 	});
 
 	it('normal tab-bar dragging still reorders PDFs without opening a window', async function () {
@@ -289,7 +291,7 @@ describe('macOS tab detachment', function () {
 		const node = win.document.querySelector(`.tab[data-id="${first.reader.tabID}"]`);
 		const last = win.document.querySelector(`.tab[data-id="${second.reader.tabID}"]`);
 		const dt = new win.DataTransfer();
-		const open = sandbox.spy(Zotero.Reader, 'open');
+		const open = sandbox.spy(Zotero, 'openMainWindow');
 		node.dispatchEvent(new win.DragEvent('dragstart', { bubbles: true, dataTransfer: dt,
 			clientX: node.offsetLeft + 10 }));
 		last.dispatchEvent(new win.DragEvent('dragover', { bubbles: true, cancelable: true,
@@ -300,59 +302,47 @@ describe('macOS tab detachment', function () {
 		assert.isFalse(open.called);
 	});
 
-	it('the source stays open until the destination is ready, and repeated requests coalesce', async function () {
+	it('the source stays open while the main window initializes, and repeated requests coalesce', async function () {
 		const { reader } = await openPDF();
-		const ready = Zotero.Promise.defer();
-		const destination = { _window: { closed: false, focus() {} }, _openPromise: ready.promise };
-		const open = sandbox.stub(Zotero.Reader, 'open').resolves(destination);
-		const first = tabs.detachTab(reader.tabID);
-		const second = tabs.detachTab(reader.tabID);
-		await waitForCallback(() => open.called);
+		let transfer;
+		const destination = { closed: false, close() {} };
+		const open = sandbox.stub(Zotero, 'openMainWindow').callsFake(({ movedTab }) => {
+			transfer = movedTab;
+			return destination;
+		});
+		const first = tabs._moveToNewWindow(reader.tabID);
+		const second = tabs._moveToNewWindow(reader.tabID);
+		assert.strictEqual(first, second);
 		assert.isOk(tabs._getTab(reader.tabID).tab);
-		ready.resolve();
-		await Promise.all([first, second]);
+		transfer.onError(new Error('test: main window failed'));
+		assert.include((await getPromiseError(first)).message, 'main window failed');
 		assert.equal(open.callCount, 1);
-		assert.isNotOk(tabs._getTab(reader.tabID).tab);
-	});
-
-	it('a failed destination initialization closes that window while preserving the original', async function () {
-		const { reader } = await openPDF();
-		const ready = Zotero.Promise.defer();
-		const close = sandbox.spy();
-		sandbox.stub(Zotero.Reader, 'open').resolves({ _window: { closed: false }, _openPromise: ready.promise, close });
-		const transfer = tabs.detachTab(reader.tabID);
-		await Zotero.Promise.delay(10);
-		ready.reject(new Error('test: reader initialization failed'));
-		assert.include((await getPromiseError(transfer)).message, 'reader initialization failed');
-		assert.isTrue(close.calledOnce);
+		assert.isTrue(transfer.cancelled);
 		assert.isOk(tabs._getTab(reader.tabID).tab);
 	});
 
-	it('a document that fails to initialize must not replace the usable original tab', async function () {
+	it('a failed live reader move closes the new window while preserving the original', async function () {
 		const { reader } = await openPDF();
-		const close = sandbox.spy();
-		sandbox.stub(Zotero.Reader, 'open').resolves({ _window: { closed: false, focus() {} },
-			_openPromise: Promise.resolve(),
-			_internalReader: { _primaryView: { initializedPromise: Promise.resolve(false) } }, close });
-		const error = await getPromiseError(tabs.detachTab(reader.tabID));
-		assert.include(error.message, 'document');
-		assert.isTrue(close.calledOnce);
-		assert.isOk(tabs._getTab(reader.tabID).tab);
+		const sourceID = reader.tabID;
+		sandbox.stub(reader, 'moveToWindow').throws(new Error('test: reader move failed'));
+		const windows = Zotero.getMainWindows();
+		assert.include((await getPromiseError(tabs._moveToNewWindow(sourceID))).message, 'reader move failed');
+		assert.isOk(tabs._getTab(sourceID).tab);
+		assert.strictEqual(Zotero.Reader.getByTabID(sourceID), reader);
+		await waitForCallback(() => Zotero.getMainWindows().every(other => windows.includes(other)));
 	});
 
-	it('failed annotation persistence prevents opening a replacement and restores normal saving', async function () {
+	it('failed annotation persistence preserves the source and restores normal saving', async function () {
 		const { reader } = await openPDF();
 		const manager = reader._internalReader._annotationManager;
 		const previous = manager._skipAnnotationSavingDebounce;
-		// Simulate a queued edit and a failed storage operation at the persistence
-		// boundary. No real data is lost; the synthetic queue is removed afterward.
 		manager._unsavedAnnotations.set('TESTFAIL', { id: 'TESTFAIL' });
 		const save = sandbox.stub(manager, '_triggerSaving').rejects(new Error('test: annotation save failed'));
-		const open = sandbox.spy(Zotero.Reader, 'open');
+		const move = sandbox.spy(reader, 'moveToWindow');
 		try {
-			assert.include((await getPromiseError(tabs.detachTab(reader.tabID))).message, 'annotation save failed');
+			assert.include((await getPromiseError(tabs._moveToNewWindow(reader.tabID))).message, 'annotation save failed');
 			assert.isOk(tabs._getTab(reader.tabID).tab);
-			assert.isFalse(open.called);
+			assert.isFalse(move.called);
 			assert.strictEqual(manager._skipAnnotationSavingDebounce, previous);
 		}
 		finally {
@@ -368,29 +358,35 @@ describe('macOS tab detachment', function () {
 		await attachment.saveTx();
 		const annotation = await addHighlight(attachment);
 		const before = annotation.toJSON();
-		const split = { pageIndex: 1, scale: 'page-width', splitType: 'vertical', splitSize: '50%' };
-		// Navigate a real multi-page PDF, then transfer without waiting for the
-		// five-second disk-write debounce. The handoff must explicitly flush it.
 		await reader.navigate({ pageIndex: 2 });
 		await waitForCallback(() => attachment.getAttachmentLastPageIndex() === 2);
-		sandbox.stub(reader, 'getSecondViewState').returns(split);
-		const open = sandbox.spy(Zotero.Reader, 'open');
-		await tabs.detachTab(reader.tabID);
-		const destination = Zotero.Reader._readers.find(r => r.itemID === attachment.id && !r.tabID);
-		assert.equal((await destination._getState()).pageIndex, 2);
-		assert.deepEqual(open.firstCall.args[2].secondViewState, split);
+		reader._internalReader.toggleVerticalSplit(true);
+		await reader._internalReader._secondaryView.initializedPromise;
+		const document = reader._internalReader;
+		const secondView = document._secondaryView;
+		// The bundled reader publishes split state through its debounced
+		// onChangeViewState callback, after the secondary view initializes.
+		await waitForCallback(() => tabs._getTab(reader.tabID).tab.data.secondViewState?.splitType === 'vertical');
+		const split = JSON.parse(JSON.stringify(tabs._getTab(reader.tabID).tab.data.secondViewState));
+		assert.isOk(split);
+		await tabs._moveToNewWindow(reader.tabID);
+		assert.strictEqual(reader._internalReader, document);
+		assert.strictEqual(document._secondaryView, secondView);
+		assert.equal((await reader._getState()).pageIndex, 2);
+		assert.deepEqual(reader._window.Zotero_Tabs._getTab(reader.tabID).tab.data.secondViewState, split);
 		assert.deepEqual(annotation.toJSON(), before);
 		assert.deepEqual(attachment.getCollections(), [collection.id]);
 		assert.isTrue(await attachment.fileExists());
 	});
 
-	it('detaches an unloaded PDF without selecting and reopening the old tab', async function () {
+	it('moves an unloaded PDF without selecting and reopening the old tab', async function () {
 		const { reader, attachment } = await openPDF();
+		const sourceID = reader.tabID;
 		tabs.select('zotero-pane');
-		tabs.unload(reader.tabID);
-		assert.isTrue(await tabs.detachTab(reader.tabID));
-		assert.isNotOk(tabs._getTab(reader.tabID).tab);
-		assert.isOk(Zotero.Reader._readers.find(r => r.itemID === attachment.id && !r.tabID));
+		tabs.unload(sourceID);
+		assert.isOk(await tabs._moveToNewWindow(sourceID));
+		assert.isNotOk(tabs._getTab(sourceID).tab);
+		assert.isOk(Zotero.Reader._readers.find(r => r.itemID === attachment.id && r._window !== win));
 	});
 
 	it('flushes an annotation edit still waiting on the reader save debounce', async function () {
@@ -401,44 +397,58 @@ describe('macOS tab detachment', function () {
 		manager.updateAnnotations(Components.utils.cloneInto([
 			{ id: annotation.key, comment: 'Last edit before tear-off' }
 		], reader._iframeWindow));
-		await tabs.detachTab(reader.tabID);
+		await tabs._moveToNewWindow(reader.tabID);
 		assert.equal(annotation.annotationComment, 'Last edit before tear-off');
-		const destination = Zotero.Reader._readers.find(r => r.itemID === attachment.id && !r.tabID);
-		assert.equal(destination._internalReader._annotationManager._annotations
+		assert.equal(reader._internalReader._annotationManager._annotations
 			.find(a => a.id === annotation.key).comment, 'Last edit before tear-off');
 	});
 
-	it('reuses an existing reader window for the same attachment', async function () {
+	it('moves a reader into an existing main window without replacing another copy', async function () {
 		const { reader, attachment } = await openPDF();
-		const existing = await Zotero.Reader.open(attachment.id, null, { openInWindow: true });
-		await existing._initPromise;
-		assert.isTrue(await tabs.detachTab(reader.tabID));
-		assert.lengthOf(Zotero.Reader._readers.filter(r => r.itemID === attachment.id && !r.tabID), 1);
-		assert.isFalse(existing._window.closed);
+		const sourceID = reader.tabID;
+		const target = await loadZoteroPane();
+		const existing = await Zotero.Reader.open(attachment.id, null, { window: target, allowDuplicate: true });
+		await existing._openPromise;
+		assert.notStrictEqual(existing, reader);
+		assert.isOk(await tabs.moveToWindow(sourceID, target));
+		assert.strictEqual(reader._window, target);
+		assert.isOk(target.Zotero_Tabs._getTab(existing.tabID).tab);
+		assert.isOk(target.Zotero_Tabs._getTab(reader.tabID).tab);
+		assert.notEqual(reader.tabID, existing.tabID);
+		assert.strictEqual(Zotero.Reader.getByTabID(existing.tabID), existing);
+		assert.strictEqual(Zotero.Reader.getByTabID(reader.tabID), reader);
 	});
 
-	it('notes open in their own window with pending note content saved', async function () {
+	it('notes move into main-window tabs with pending note content saved', async function () {
 		const note = await createDataObject('item', { itemType: 'note', note: '<p>Original</p>' });
-		const editor = await Zotero.Notes.open(note.id);
+		const editor = await Zotero.Notes.open(note.id, null, { window: win });
 		const tabID = editor.tabID;
-		// Notes.open resolves when the editor is ready; the tab's load hook marks
-		// it loaded in a following microtask, before a person can start dragging.
 		await waitForCallback(() => tabs._getTab(tabID).tab.type === 'note');
 		const html = '<div data-schema-version="9"><p>Pending edit before tear-off</p></div>';
-		// Mock only the editor bridge's latest unsaved payload; saving and both
-		// editor windows use the actual application/database implementation.
 		sandbox.stub(editor._iframeWindow.wrappedJSObject, 'getDataSync').returns({ html });
-		assert.isTrue(await tabs.detachTab(tabID));
+		const newID = await tabs._moveToNewWindow(tabID);
+		assert.isOk(newID);
 		assert.include(note.getNote(), 'Pending edit before tear-off');
 		assert.isNotOk(tabs._getTab(tabID).tab);
-		assert.isOk(Zotero.Notes._editorInstances.find(e => e.itemID === note.id && e.viewMode === 'window'));
+		assert.isOk(Zotero.Notes.getByTabID(newID));
 	});
 
-	it('ignores missing, library, and unsupported tab types', async function () {
-		assert.isFalse(await tabs.detachTab('missing-tab'));
-		assert.isFalse(await tabs.detachTab('zotero-pane'));
+	it('library tabs use the same new-main-window handoff', async function () {
+		win.ZoteroPane.newLibraryTab();
+		const sourceID = tabs.selectedID;
+		await tabs.getLoadPromise(sourceID);
+		const newID = await tabs._moveToNewWindow(sourceID);
+		assert.isOk(newID);
+		assert.isNotOk(tabs._getTab(sourceID).tab);
+		const target = Zotero.getMainWindows().find(other => !originalWindows.includes(other));
+		assert.isTrue(target.Zotero_Tabs.isLibraryTab(newID));
+		assert.isTrue(target.ZoteroPane.getLibraryView(newID).loaded);
+	});
+
+	it('ignores missing and unsupported tab types', async function () {
+		assert.isNull(await tabs._onTabTearOff('missing-tab', 100, 100));
 		const { id } = tabs.add({ type: 'test-custom', title: 'Extension-owned tab', data: {} });
-		assert.isFalse(await tabs.detachTab(id));
+		assert.isNull(await tabs._onTabTearOff(id, 100, 100));
 		assert.isOk(tabs._getTab(id).tab);
 	});
 
@@ -473,7 +483,7 @@ describe('macOS tab detachment', function () {
 		assert.isEmpty(alerts, String(loggedErrors.lastCall?.args[0]));
 		assert.isTrue(hiddenBeforeRelease, 'The native drag must hide the source before mouse release');
 		assert.isTrue(updates.getCalls().some(call => call.args[0].width > 200), 'Native preview was updated during the drag');
-		const destination = Zotero.Reader._readers.find(r => r.itemID === attachment.id && !r.tabID);
+		const destination = Zotero.Reader._readers.find(r => r.itemID === attachment.id && r._window !== win);
 		assert.isOk(destination);
 		assert.isFalse(destination._window.closed);
 		await Zotero.Promise.delay(5000);

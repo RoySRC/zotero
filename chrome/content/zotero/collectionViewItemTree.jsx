@@ -350,7 +350,9 @@ class CollectionViewItemTreeRowProvider extends ItemTreeRowProvider {
 			let rowChanged;
 			switch (type) {
 				case 'search':
-					rowChanged = collectionTreeRow.setSearch(data, Zotero.Prefs.get('search.quicksearch-mode'));
+					rowChanged = collectionTreeRow.setSearch(
+						data, Zotero.Prefs.getForWindow(window, 'search.quicksearch-mode')
+					);
 					break;
 				case 'citation-search':
 					rowChanged = collectionTreeRow.setSearch(data, 'fields');
@@ -821,7 +823,10 @@ class CollectionViewItemTreeRowProvider extends ItemTreeRowProvider {
 					}
 				}
 				if (clear) {
-					var search = document.getElementById('zotero-tb-search');
+					// The search box is in the owning library view in the main window and at
+					// the document level in dialogs
+					var search = this.itemTree.domEl.closest('library-view')?.getElement('zotero-tb-search')
+						|| document.getElementById('zotero-tb-search');
 					if (search) {
 						search.searchTextbox.value = '';
 					}
@@ -1409,7 +1414,7 @@ class CollectionViewItemTree extends ItemTree {
 					this.setDropEffect(event, "copy");
 				}
 			}
-			else if (event.dataTransfer.types.includes("application/x-moz-file")) {
+			else if (event.dataTransfer.types.includes("Files")) {
 				// As of Aug. 2013 nightlies:
 				//
 				// - Setting the dropEffect only works on Linux and OS X.

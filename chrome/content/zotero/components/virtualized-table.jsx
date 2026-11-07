@@ -406,6 +406,7 @@ class VirtualizedTable extends React.Component {
 		this.isHeaderMouseUp = true;
 		
 		this._isMouseDrag = false;
+		this._targetIndex = null;
 
 		this.preventScrollKeys = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", " ", "PageUp", "PageDown"]);
 		this.onSelection = oncePerAnimationFrame(this._onSelection);
@@ -543,7 +544,10 @@ class VirtualizedTable extends React.Component {
 		
 		onFocus: PropTypes.func,
 
+		// Called with (event, x, y, index), where index is the right-clicked row, if any
 		onItemContextMenu: PropTypes.func,
+		// Don't select a right-clicked row (call setTargetRow() to mark it instead)
+		skipContextMenuSelection: PropTypes.bool,
 		customRowHeights: PropTypes.array,
 		getRowHeight: PropTypes.func,
 	};
@@ -829,8 +833,12 @@ class VirtualizedTable extends React.Component {
 	
 	_handleMouseDown = async (e, index) => {
 		const modifierClick = e.shiftKey || e.ctrlKey || e.metaKey;
-		// All modifier clicks handled in mouseUp per mozilla itemtree convention
-		if (!modifierClick && !this.selection.isSelected(index)) {
+		// All modifier clicks handled in mouseUp per mozilla itemtree convention. A plain click
+		// on an unselected draggable row is also handled in mouseUp, so that dragging the row
+		// doesn't select it, and a right-click is handled in contextmenu.
+		let draggable = e.button == 0 && e.currentTarget.draggable;
+		let contextClick = e.button == 2 && this.props.skipContextMenuSelection;
+		if (!modifierClick && !draggable && !contextClick && !this.selection.isSelected(index)) {
 			this._onSelection(index, false, false);
 		}
 		this.focus();
@@ -849,10 +857,10 @@ class VirtualizedTable extends React.Component {
 			// Do not hijack context menu on inputs, fixes #5374
 			return;
 		}
-		if (!this.selection.isSelected(index)) {
+		if (!this.selection.isSelected(index) && !this.props.skipContextMenuSelection) {
 			this._onSelection(index, false, false);
 		}
-		this.props.onItemContextMenu(e, e.screenX, e.screenY);
+		this.props.onItemContextMenu(e, e.screenX, e.screenY, index);
 		this.focus();
 	}
 	
@@ -987,9 +995,9 @@ class VirtualizedTable extends React.Component {
 		const result = this._getResizeColumns();
 		if (!result) return;
 		const [aColumn, bColumn, resizingColumn] = result;
-		const a = document.querySelector(`#${this.props.id} .virtualized-table-header .cell.${window.CSS.escape(aColumn.dataKey)}`);
-		const b = document.querySelector(`#${this.props.id} .virtualized-table-header .cell.${window.CSS.escape(bColumn.dataKey)}`);
-		const resizing = document.querySelector(`#${this.props.id} .virtualized-table-header .cell.${window.CSS.escape(resizingColumn.dataKey)}`);
+		const a = this._topDiv.querySelector(`.virtualized-table-header .cell.${window.CSS.escape(aColumn.dataKey)}`);
+		const b = this._topDiv.querySelector(`.virtualized-table-header .cell.${window.CSS.escape(bColumn.dataKey)}`);
+		const resizing = this._topDiv.querySelector(`.virtualized-table-header .cell.${window.CSS.escape(resizingColumn.dataKey)}`);
 		const aRect = a.getBoundingClientRect();
 		const bRect = b.getBoundingClientRect();
 		const resizingRect = resizing.getBoundingClientRect();
@@ -1089,7 +1097,7 @@ class VirtualizedTable extends React.Component {
 		if (!result) return;
 		let resizeData = {};
 		for (const column of result) {
-			const elem = document.querySelector(`#${this.props.id} .virtualized-table-header .cell.${window.CSS.escape(column.dataKey)}`)
+			const elem = this._topDiv.querySelector(`.virtualized-table-header .cell.${window.CSS.escape(column.dataKey)}`);
 			resizeData[column.dataKey] = elem.getBoundingClientRect().width;
 		}
 		this._columns.onResize(resizeData, true);
@@ -1143,9 +1151,9 @@ class VirtualizedTable extends React.Component {
 	}
 
 	_findColumnDragPosition(x) {
-		const headerRect = document.querySelector(`#${this.props.id} .virtualized-table-header`).getBoundingClientRect();
+		const headerRect = this._topDiv.querySelector(`.virtualized-table-header`).getBoundingClientRect();
 		
-		let coords = Array.from(document.querySelectorAll(`#${this.props.id} .virtualized-table-header .resizer`))
+		let coords = Array.from(this._topDiv.querySelectorAll(`.virtualized-table-header .resizer`))
 			.map((elem) => {
 				const rect = elem.getBoundingClientRect();
 				// accounting for resizer offset
@@ -1283,7 +1291,25 @@ class VirtualizedTable extends React.Component {
 		else {
 			node.removeAttribute('aria-selected');
 		}
+		node.classList.toggle('target', index === this._targetIndex);
 		return node;
+	}
+	
+	/**
+	 * Mark a row that an action applies to without the row being selected (e.g., a
+	 * right-clicked row)
+	 *
+	 * @param {Number|null} index
+	 */
+	setTargetRow(index) {
+		let previous = this._targetIndex;
+		this._targetIndex = index;
+		if (previous !== null) {
+			this.invalidateRow(previous);
+		}
+		if (index !== null) {
+			this.invalidateRow(index);
+		}
 	}
 
 	_renderHeaderCells = () => {
@@ -1669,7 +1695,7 @@ class VirtualizedTable extends React.Component {
 		if (!this.props.showHeader) return;
 		const jsWindow = document.querySelector(`#${this._jsWindowID} .windowed-list`);
 		if (!jsWindow) return;
-		const header = document.querySelector(`#${this.props.id} .virtualized-table-header`);
+		const header = this._topDiv.querySelector(`.virtualized-table-header`);
 		// Use matching integer measurements so fractional flex widths cannot make
 		// the header padding oscillate around a scrollbar-width boundary.
 		const scrollbarWidth = Math.max(0, jsWindow.parentElement.offsetWidth - jsWindow.parentElement.clientWidth);

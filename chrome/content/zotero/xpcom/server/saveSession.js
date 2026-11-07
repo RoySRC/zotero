@@ -70,6 +70,11 @@ Zotero.Server.Connector.SaveSession = class {
 		this._progressItems = {};
 		this._orderedProgressItems = [];
 		this._userAddedNotes = {};
+		// The pane and library view that were active when the save started, so that later
+		// updates to the session keep targeting the same window and tab
+		this._pane = Zotero.getActiveZoteroPane();
+		this._paneWindow = this._pane?.document.defaultView;
+		this._view = this._pane?.libraryView;
 	}
 
 	async saveItems(target) {
@@ -151,6 +156,31 @@ Zotero.Server.Connector.SaveSession = class {
 	}
 
 	/**
+	 * The pane this session saves to, falling back to the active one if its window is gone
+	 *
+	 * @return {ZoteroPane|null}
+	 */
+	_getPane() {
+		if (this._pane && !this._paneWindow.closed) {
+			return this._pane;
+		}
+		return Zotero.getActiveZoteroPane();
+	}
+	
+	/**
+	 * The library view this session saves to, falling back to the active view of the pane
+	 * if the original view is gone
+	 *
+	 * @return {LibraryView|null}
+	 */
+	_getView() {
+		if (this._view?.loaded && !this._paneWindow.closed) {
+			return this._view;
+		}
+		return this._getPane()?.libraryView || null;
+	}
+	
+	/**
 	 * Change the target data for this session and update any items that have already been saved
 	 */
 	async update(targetID, tags, note) {
@@ -160,9 +190,9 @@ Zotero.Server.Connector.SaveSession = class {
 		this._currentNote = note || "";
 		
 		// Select new destination in collections pane
-		var zp = Zotero.getActiveZoteroPane();
-		if (zp && zp.collectionsView) {
-			await zp.collectionsView.selectByID(targetID);
+		var view = this._getView();
+		if (view?.collectionsView) {
+			await view.collectionsView.selectByID(targetID);
 		}
 		// If window is closed, select target collection re-open
 		else {
@@ -172,12 +202,12 @@ Zotero.Server.Connector.SaveSession = class {
 		await this._updateItems(this._items);
 		
 		// If a single item was saved, select it (or its parent, if it now has one)
-		if (zp && zp.collectionsView && Object.values(this._items).length == 1) {
+		if (view?.collectionsView && Object.values(this._items).length == 1) {
 			let item = Object.values(this._items)[0];
 			item = item.isTopLevelItem() ? item : item.parentItem;
 			// Don't select if in trash
 			if (!item.deleted) {
-				await zp.selectItem(item.id, { noTabSwitch: true, noWindowRestore: true });
+				await view.selectItems([item.id]);
 			}
 		}
 	}

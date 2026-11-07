@@ -36,6 +36,7 @@ var LibraryTree = class LibraryTree extends React.Component {
 
 		this.domEl = props.domEl;
 		this._ownerDocument = props.domEl.ownerDocument;
+		this._dragIndices = [];
 		
 		this.onSelect = this.createEventBinding('select');
 	}
@@ -121,6 +122,9 @@ var LibraryTree = class LibraryTree extends React.Component {
 		// so we set an unintialized flag that we check in select functions
 		// like #notify
 		if (this._uninitialized) return;
+		// Ignore errors from a tree removed from the document, e.g., when a library tab closes
+		// while the tree mounts
+		if (!this.domEl.isConnected) return;
 		Zotero.debug("ItemTree: React threw an error");
 		Zotero.logError(error);
 		Zotero.debug(info);
@@ -342,12 +346,17 @@ var LibraryTree = class LibraryTree extends React.Component {
 	 * Start a drag using HTML 5 Drag and Drop
 	 */
 	onDragStart(event, index) {
-		// Propagate selection before we set the drag image if dragging not one of the selected rows
-		if (!this.selection.isSelected(index)) {
-			this.selection.select(index);
+		// Drag the selected rows, or just this row if it isn't selected
+		let dragElems;
+		if (this.selection.isSelected(index)) {
+			this._dragIndices = [...this.selection.selected].sort((a, b) => a - b);
+			dragElems = this.domEl.querySelectorAll('.selected');
+		}
+		else {
+			this._dragIndices = [index];
+			dragElems = [event.currentTarget];
 		}
 		// Set drag image
-		const dragElems = this.domEl.querySelectorAll('.selected');
 		for (let elem of dragElems) {
 			elem = elem.cloneNode(true);
 			elem.style.position = "initial";
@@ -357,6 +366,7 @@ var LibraryTree = class LibraryTree extends React.Component {
 
 	onDragEnd(_event, _index) {
 		this._dragImageContainer.innerHTML = "";
+		this._dragIndices = [];
 	}
 };
 

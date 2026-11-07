@@ -44,7 +44,9 @@ const defaults = {
 // first n tags will be measured using DOM method for more accurate measurment (at the cost of performance)
 const FORCE_DOM_TAGS_FOR_COUNT = 200;
 
-Zotero.TagSelector = class TagSelectorContainer extends React.PureComponent {
+// The class closes over this window's React and DOM globals, so each window initializes
+// its tag selector from its own copy.
+window.TagSelectorContainer = class TagSelectorContainer extends React.PureComponent {
 	constructor(props) {
 		super(props);
 		this._notifierID = Zotero.Notifier.registerObserver(
@@ -447,7 +449,7 @@ Zotero.TagSelector = class TagSelectorContainer extends React.PureComponent {
 	}
 	
 	getContainerDimensions() {
-		var container = document.getElementById(this.props.container);
+		var container = this.props.container;
 		return {
 			width: container.clientWidth,
 			height: container.clientHeight
@@ -465,7 +467,7 @@ Zotero.TagSelector = class TagSelectorContainer extends React.PureComponent {
 		elem.className = 'tag-selector-item';
 		elem.style.position = 'absolute';
 		elem.style.opacity = 0;
-		var container = document.getElementById(this.props.container);
+		var container = this.props.container;
 		container.appendChild(elem);
 		var style = window.getComputedStyle(elem);
 		var props = {
@@ -512,7 +514,7 @@ Zotero.TagSelector = class TagSelectorContainer extends React.PureComponent {
 				this.divMeasure.style.position = 'absolute';
 				this.divMeasure.style.top = '-9999px';
 				this.divMeasure.whiteSpace = 'nowrap';
-				document.querySelector('#zotero-tag-selector').appendChild(this.divMeasure);
+				this.props.element.appendChild(this.divMeasure);
 			}
 
 			this.divMeasure.style.font = font;
@@ -628,6 +630,7 @@ Zotero.TagSelector = class TagSelectorContainer extends React.PureComponent {
 		// Zotero.debug(`Prepared ${tags.length} tags in ${new Date() - d} ms`);
 		return <TagSelector
 			tags={tags}
+			label={this.props.element.getAttribute('label') || ''}
 			searchBoxRef={this.searchBoxRef}
 			tagListRef={this.tagListRef}
 			searchString={this.state.searchString}
@@ -767,8 +770,31 @@ Zotero.TagSelector = class TagSelectorContainer extends React.PureComponent {
 		return this.selectedTags;
 	}
 
+	/**
+	 * Set the selected tags without filtering the items list
+	 *
+	 * @param {Set|Array} tags
+	 */
+	setTagSelection(tags) {
+		this.selectedTags = new Set(tags);
+	}
+
 	clearTagSelection() {
 		this.selectedTags = new Set();
+	}
+
+	/**
+	 * Apply the current values of the shared tag selector prefs, which another tag selector
+	 * may have changed
+	 */
+	async adoptPrefs() {
+		let showAutomatic = Zotero.Prefs.get('tagSelector.showAutomatic');
+		let displayAllTags = Zotero.Prefs.get('tagSelector.displayAllTags');
+		if (showAutomatic == this.state.showAutomatic && displayAllTags == this.displayAllTags) {
+			return;
+		}
+		this.displayAllTags = displayAllTags;
+		this.setState({ showAutomatic, ...(await this.getTagsAndScope()) });
 	}
 	
 	async openColorPickerWindow() {
@@ -968,11 +994,16 @@ Zotero.TagSelector = class TagSelectorContainer extends React.PureComponent {
 		return this.state.showAutomatic;
 	}
 	
+	get searchString() {
+		return this.state.searchString;
+	}
+	
 	static async init(domEl, opts) {
 		var ref;
 		await new Promise((resolve) => {
 			let root = ReactDOM.createRoot(domEl);
 			opts.root = root;
+			opts.element = domEl;
 			root.render(<TagSelectorContainer ref={(c) => {
 				ref = c;
 				resolve();
@@ -992,7 +1023,8 @@ Zotero.TagSelector = class TagSelectorContainer extends React.PureComponent {
 	}
 	
 	static propTypes = {
-		container: PropTypes.string.isRequired,
+		container: PropTypes.object.isRequired,
+		element: PropTypes.object.isRequired,
 		onSelection: PropTypes.func.isRequired,
 		root: PropTypes.object,
 	};

@@ -1,30 +1,25 @@
 'use strict';
 
 /**
- * Decide whether a completed drag means "open this tab in its own window".
- *
- * This module deliberately has no DOM or operating-system dependencies, so the
- * boundary rules can be tested without opening a window. The caller supplies
- * Gecko's drag-end values and the source window's outer bounds in CSS pixels.
- * `none` means no drop target accepted the drag; it does NOT prove that the user
- * released it deliberately, which is why mozUserCancelled is checked separately.
- * A small margin prevents a shaky tab reorder near the window border from
- * creating a window. Drops anywhere inside the window remain ordinary drags.
- *
- * @param {Object} drag - Platform, locally tracked tab ID, coordinates and outcome
- * @param {Object} source - screenX, screenY, outerWidth and outerHeight
- * @returns {Boolean} True only for a deliberate outside-window macOS drop
+ * Follow the main-window tab tear-off boundary: an unaccepted, deliberate drop
+ * outside the source tab bar (including its small lower margin) opens a window.
+ * The caller supplies the bar's bottom in screen coordinates and its height.
+ * Library tabs and all platforms use the same rule; cancellation never moves a tab.
  */
 function shouldDetachTab(drag, source) {
-	if (!drag.isMac || !drag.tabID || drag.tabID === 'zotero-pane'
-		|| drag.userCancelled || drag.dropEffect !== 'none') return false;
-	if (![drag.screenX, drag.screenY, source.screenX, source.screenY, source.outerWidth, source.outerHeight].every(Number.isFinite)
-		|| source.outerWidth <= 0 || source.outerHeight <= 0) return false;
-	const margin = 8;
-	return drag.screenX < source.screenX - margin
-		|| drag.screenX > source.screenX + source.outerWidth + margin
-		|| drag.screenY < source.screenY - margin
-		|| drag.screenY > source.screenY + source.outerHeight + margin;
+	if (!drag.tabID || drag.userCancelled || drag.dropEffect !== 'none') return false;
+	if (![drag.screenX,
+		drag.screenY,
+		source.screenX,
+		source.screenY,
+		source.outerWidth,
+		source.tabBarBottom,
+		source.tabBarHeight].every(Number.isFinite)
+		|| source.outerWidth <= 0 || source.tabBarHeight <= 0) return false;
+	return !(drag.screenX > source.screenX
+		&& drag.screenX < source.screenX + source.outerWidth
+		&& drag.screenY > source.screenY
+		&& drag.screenY < source.tabBarBottom + source.tabBarHeight * 1.5);
 }
 
 /**

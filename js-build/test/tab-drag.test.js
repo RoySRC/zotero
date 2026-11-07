@@ -6,32 +6,31 @@ const { shouldDetachTab, detachedWindowBounds, withTimeout } = require('../../ch
 
 // These coordinates deliberately include a monitor to the left of the primary
 // display. Negative screen coordinates are valid, not missing event data.
-const source = { screenX: 100, screenY: 100, outerWidth: 900, outerHeight: 700 };
-const drop = { isMac: true, tabID: 'reader-test', screenX: 1100, screenY: 250,
+const source = { screenX: 100, screenY: 100, outerWidth: 900, tabBarBottom: 150, tabBarHeight: 30 };
+const drop = { tabID: 'reader-test', screenX: 1100, screenY: 250,
 	dropEffect: 'none', userCancelled: false };
 
-test('only deliberate macOS drops outside the source window detach', () => {
-	for (const point of [[1100, 250], [-100, 250], [400, 900], [400, 50]]) {
+test('deliberate drops outside the tab-bar boundary tear off on every platform', () => {
+	for (const point of [[1100, 250], [-100, 250], [400, 900], [400, 50], [400, 400]]) {
 		assert.equal(shouldDetachTab({ ...drop, screenX: point[0], screenY: point[1] }, source), true);
 	}
+	assert.equal(shouldDetachTab({ ...drop, tabID: 'zotero-pane', isMac: false }, source), true);
 });
 
-test('reordering, the document area, title bar, and window borders do not detach', () => {
-	for (const point of [[400, 120], [400, 400], [100, 100], [1000, 800], [99, 400]]) {
+test('reordering, title bar, and the tab-bar lower margin do not tear off', () => {
+	for (const point of [[400, 120], [400, 150], [400, 194]]) {
 		assert.equal(shouldDetachTab({ ...drop, screenX: point[0], screenY: point[1] }, source), false);
 	}
 });
 
-test('Escape, accepted drops, foreign drags, the library tab, and other OSes do not detach', () => {
+test('Escape, accepted drops, and foreign drags do not tear off', () => {
 	for (const override of [
 		{ userCancelled: true },
 		{ dropEffect: 'move' },
 		{ dropEffect: 'copy' },
 		{ dropEffect: 'link' },
 		{ dropEffect: undefined },
-		{ tabID: null },
-		{ tabID: 'zotero-pane' },
-		{ isMac: false }
+		{ tabID: null }
 	]) {
 		assert.equal(shouldDetachTab({ ...drop, ...override }, source), false);
 	}
@@ -42,6 +41,7 @@ test('missing or invalid screen data fails closed', () => {
 		assert.equal(shouldDetachTab({ ...drop, screenX: value }, source), false);
 	}
 	assert.equal(shouldDetachTab(drop, { ...source, outerWidth: 0 }), false);
+	assert.equal(shouldDetachTab(drop, { ...source, tabBarHeight: 0 }), false);
 });
 
 test('window positioning keeps the title bar and entire window on the destination monitor', () => {

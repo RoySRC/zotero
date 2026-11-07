@@ -187,7 +187,9 @@
 
 			this._notifierID = Zotero.Notifier.registerObserver(
 				this, ['item', 'itempane', 'tab'], 'ItemDetails');
-			this._prefsObserverID = Zotero.Prefs.registerObserver('pinnedPane', this._restorePinnedPane.bind(this));
+			this._unobservePinnedPane = Zotero.Prefs.observeForWindow(
+				window, 'pinnedPane', this._restorePinnedPane.bind(this)
+			);
 
 			this._disableScrollHandler = false;
 			this._pinnedPaneMinScrollHeight = 0;
@@ -211,7 +213,8 @@
 			this._intersectionOb.disconnect();
 
 			Zotero.Notifier.unregisterObserver(this._notifierID);
-			Zotero.Prefs.unregisterObserver(this._prefsObserverID);
+			this._unobservePinnedPane?.();
+			this._unobservePinnedPane = null;
 		}
 
 		async render() {
@@ -378,7 +381,7 @@
 			this._header.renderCustomHead(callback);
 		}
 
-		notify = async (action, type, ids, _extraData) => {
+		notify = async (action, type, ids, extraData) => {
 			if (action == 'refresh' && this.item) {
 				if (type == 'itempane') {
 					this.renderCustomSections();
@@ -389,7 +392,7 @@
 			}
 
 			if (action == 'select' && type == 'tab') {
-				this._handleTabSelect(ids);
+				this._handleTabSelect(ids, extraData);
 			}
 		};
 
@@ -566,7 +569,7 @@
 				event.preventDefault();
 				event.stopPropagation();
 			};
-			let isLibraryTab = Zotero_Tabs.selectedIndex == 0;
+			let isLibraryTab = Zotero_Tabs.selectedIsLibrary;
 
 			// Tab from the scrollable area focuses the pinned pane if it exists
 			if (event.target.classList.contains("zotero-view-item") && event.key == "Tab" && !event.shiftKey && this.pinnedPane) {
@@ -578,7 +581,8 @@
 			// On Escape/Enter on editable-text, return focus to the item tree or reader
 			if (event.key == "Escape" || (event.key == "Enter" && event.target.classList.contains('input'))) {
 				if (isLibraryTab) {
-					document.querySelector('#zotero-items-tree .virtualized-table').focus();
+					this.closest('library-view')?.getElement('zotero-items-tree')
+						.querySelector('.virtualized-table').focus();
 				}
 				else {
 					let reader = Zotero.Reader.getByTabID(Zotero_Tabs.selectedID);
@@ -648,8 +652,9 @@
 			}
 		};
 
-		_handleTabSelect(tabIDs) {
-			if (!this.tabID || typeof Zotero_Tabs === 'undefined') {
+		_handleTabSelect(tabIDs, extraData) {
+			if (!this.tabID || typeof Zotero_Tabs === 'undefined'
+					|| !Zotero_Tabs.isOwnTabEvent(extraData, tabIDs[0])) {
 				return;
 			}
 			let isTabSelected = tabIDs.includes(this.tabID);
@@ -664,19 +669,14 @@
 				return;
 			}
 			let pinnedPane = this.pinnedPane;
-			if (pinnedPane) {
-				Zotero.Prefs.set('pinnedPane', pinnedPane);
-			}
-			else {
-				Zotero.Prefs.clear('pinnedPane');
-			}
+			Zotero.Prefs.setForWindow(window, 'pinnedPane', pinnedPane || undefined);
 		}
 
 		_restorePinnedPane() {
 			if (this.tabType !== 'library') {
 				return;
 			}
-			let pinnedPane = Zotero.Prefs.get('pinnedPane') || '';
+			let pinnedPane = Zotero.Prefs.getForWindow(window, 'pinnedPane') || '';
 			if (this.pinnedPane !== pinnedPane) {
 				this.pinnedPane = pinnedPane;
 			}

@@ -76,8 +76,7 @@
 			if (this.tabType != "library") {
 				return false;
 			}
-			return ZoteroPane.collectionsView.selectedTreeRow
-				&& ZoteroPane.collectionsView.selectedTreeRow.isTrash();
+			return !!this.collectionTreeRows?.[0]?.isTrash();
 		}
 
 		get usePreview() {

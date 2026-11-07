@@ -119,6 +119,10 @@ var loadZoteroPane = async function (win) {
 		if (win.ZoteroPane && win.ZoteroPane.collectionsView) {
 			break;
 		}
+		// A window restored with another tab selected loads its library tab only when it's shown
+		if (win.Zotero_Tabs?.numTabs && !win.Zotero_Tabs.selectedIsLibrary) {
+			win.Zotero_Tabs.selectLibraryTab();
+		}
 		Zotero.debug("Waiting for ZoteroPane initialization");
 		await Zotero.Promise.delay(50);
 	}
@@ -127,6 +131,20 @@ var loadZoteroPane = async function (win) {
 	
 	return win;
 };
+
+/**
+ * Close all of a window's tabs but its library tabs
+ *
+ * @param {ChromeWindow} [win]
+ */
+function closeItemTabs(win) {
+	win = win || Zotero.getMainWindow();
+	let tabs = win.Zotero_Tabs;
+	let ids = tabs._tabs.filter(tab => !tabs.isLibraryTab(tab.id)).map(tab => tab.id);
+	if (ids.length) {
+		tabs.close(ids);
+	}
+}
 
 /**
  * Bring the main window to the front, for tests that rely on focus (e.g., editable-text).
@@ -468,8 +486,9 @@ async function waitForScrollToPane(itemDetails, paneID) {
 
 function clickOnItemsRow(win, itemsView, row) {
 	itemsView._treebox.scrollToRow(row);
-	let elem = win.document.querySelector(`#${itemsView.id}-row-${row}`);
+	let elem = itemsView.domEl.querySelector(`#${itemsView.id}-row-${row}`);
 	elem.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+	elem.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
 }
 
 
