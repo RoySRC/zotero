@@ -963,38 +963,18 @@ var ZoteroPane = new function () {
 				});
 			}
 			else if (_initialMovedTab) {
-				let transfer = _initialMovedTab;
-				let { windowID, tabID } = transfer;
+				let { windowID, tabID } = _initialMovedTab;
 				let sourceWindow = Zotero.getMainWindows()
 					.find(win => win.Zotero_Tabs?.windowID === windowID);
-				Promise.resolve()
-					.then(() => {
-						// A timed-out or cancelled handoff must not take the source tab
-						// when this window finally finishes loading.
-						if (transfer.cancelled || window.closed) return null;
-						return sourceWindow?.Zotero_Tabs.moveToWindow(tabID, window, undefined, transfer);
-					})
-					.then((newID) => {
-						if (transfer.cancelled || window.closed) return;
-						if (newID) {
-							transfer.completedID = newID;
-							transfer.onComplete?.(newID);
-							return;
-						}
-						// The tab was closed or its window went away before this window opened
-						if (transfer.onError) {
-							transfer.onError(new Error('Tab could not be moved to the new window'));
-						}
-						else {
-							openInitialLibraryTab();
-						}
-					})
+				Promise.resolve(sourceWindow?.Zotero_Tabs.moveToWindow(tabID, window))
 					.catch((e) => {
 						Zotero.logError(e);
-						// Once ownership moved, an acknowledgement error cannot undo it.
-						if (transfer.completedID || transfer.cancelled || window.closed) return;
-						if (transfer.onError) transfer.onError(e);
-						else openInitialLibraryTab();
+					})
+					.then((newID) => {
+						// The tab was closed or its window went away before this window opened
+						if (!newID) {
+							openInitialLibraryTab();
+						}
 					});
 			}
 			else {

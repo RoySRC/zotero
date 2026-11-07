@@ -28,8 +28,6 @@
 import React, { forwardRef, useState, useRef, useImperativeHandle, useEffect, useLayoutEffect, memo, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import cx from 'classnames';
-const { shouldDetachTab } = require('zotero/tabDrag');
-const TabDragPreview = require('zotero/tabDragPreview');
 const { CSSIcon, CSSItemTypeIcon } = require('./icons');
 
 const SCROLL_ARROW_SCROLL_BY = 222;
@@ -146,7 +144,6 @@ const TabBar = forwardRef(function (props, ref) {
 	const [dropIndex, setDropIndex] = useState(null);
 	const dropIndicatorRef = useRef();
 	const dragIDRef = useRef(null);
-	const dragPreviewRef = useRef(null);
 	const dragGrabbedDeltaXRef = useRef();
 	// Where the drag started, and whether the tab has moved from there yet
 	const dragStartXRef = useRef();
@@ -173,9 +170,6 @@ const TabBar = forwardRef(function (props, ref) {
 	
 	// Finish a drag whose tab has been moved to another window
 	const endDrag = useCallback(() => {
-		dragPreviewRef.current?.stop();
-		dragPreviewRef.current = null;
-		dragIDRef.current = null;
 		setDragging(false);
 	}, []);
 
@@ -190,7 +184,6 @@ const TabBar = forwardRef(function (props, ref) {
 		props.onLoad();
 		return () => {
 			window.removeEventListener('resize', handleResize);
-			dragPreviewRef.current?.stop();
 		};
 	}, []);
 
@@ -362,17 +355,12 @@ const TabBar = forwardRef(function (props, ref) {
 			event.preventDefault();
 			return;
 		}
-		dragPreviewRef.current?.stop();
-		dragPreviewRef.current = null;
 		event.dataTransfer.effectAllowed = 'move';
 		// We don't want the generated image from the target element,
 		// therefore setting an empty image
 		let img = document.createElement('img');
 		img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 		event.dataTransfer.setDragImage(img, 0, 0);
-		if (Zotero.isMac) {
-			dragPreviewRef.current = new TabDragPreview(window, event.currentTarget, event.dataTransfer);
-		}
 		emptyDragImageRef.current = img;
 		dragImageShownRef.current = false;
 		let tabRect = event.target.getBoundingClientRect();
@@ -386,19 +374,17 @@ const TabBar = forwardRef(function (props, ref) {
 		canvas.width = DRAG_THUMBNAIL_WIDTH * window.devicePixelRatio;
 		canvas.height = DRAG_THUMBNAIL_HEIGHT * window.devicePixelRatio;
 		dragThumbnailRef.current = null;
-		if (!dragPreviewRef.current) {
-			props.onDrawDragThumbnail(id, canvas)
-				.then((drawn) => {
-					if (!drawn || dragIDRef.current !== id || dragPreviewRef.current) return;
-					dragThumbnailRef.current = canvas;
-					// Show it if the tab has already left the tab bar
-					if (dragImageShownRef.current) {
-						dragImageShownRef.current = false;
-						setDragImageShown(dataTransfer, true);
-					}
-				})
-				.catch(e => Zotero.logError(e));
-		}
+		props.onDrawDragThumbnail(id, canvas)
+			.then((drawn) => {
+				if (!drawn || dragIDRef.current !== id) return;
+				dragThumbnailRef.current = canvas;
+				// Show it if the tab has already left the tab bar
+				if (dragImageShownRef.current) {
+					dragImageShownRef.current = false;
+					setDragImageShown(dataTransfer, true);
+				}
+			})
+			.catch(e => Zotero.logError(e));
 		// Identify the tab to the tab bar of another window
 		event.dataTransfer.setData(
 			'zotero/tab', JSON.stringify({ windowID: props.windowID, id })
@@ -419,7 +405,6 @@ const TabBar = forwardRef(function (props, ref) {
 	 * bar, where the tab itself can't follow it, and hide it again once it's back
 	 */
 	function setDragImageShown(dataTransfer, shown) {
-		if (dragPreviewRef.current) return;
 		if (dragImageShownRef.current === shown) return;
 		dragImageShownRef.current = shown;
 		// Shown once it's drawn
@@ -439,38 +424,32 @@ const TabBar = forwardRef(function (props, ref) {
 			Zotero.debug(e, 2);
 		}
 	}
-
-	const handleDragEnd = useCallback(async (event) => {
+	
+	const handleDragEnd = useCallback((event) => {
 		let id = dragIDRef.current;
-		let preview = dragPreviewRef.current;
-		dragIDRef.current = null;
-		dragPreviewRef.current = null;
-		preview?.stop({ restore: false });
-		for (let node of tabsRef.current.children) node.style.transform = '';
 		setDragging(false);
 		let { dataTransfer, screenX, screenY } = event;
+		// Refocusing a window brings it to the front, so leave the window behind the one the tab
+		// was dropped in
 		let droppedInOtherWindow = dataTransfer.dropEffect != 'none'
 			&& !droppedInOwnWindowRef.current;
 		droppedInOwnWindowRef.current = false;
-		try {
-			let barRect = tabsRef.current.getBoundingClientRect();
-			if (!shouldDetachTab({ tabID: id, screenX, screenY,
-				dropEffect: dataTransfer.dropEffect, userCancelled: dataTransfer.mozUserCancelled },
-			{ screenX: window.screenX, screenY: window.screenY, outerWidth: window.outerWidth,
-				tabBarBottom: window.mozInnerScreenY + barRect.bottom, tabBarHeight: barRect.height })) return;
-			let { x, y } = tearOffOffsetRef.current;
-			if (await props.onTabTearOff(id, screenX - x, screenY - y)) {
-				droppedInOtherWindow = true;
-			}
+		if (!droppedInOtherWindow && document.hasFocus()) {
+			props.onRefocus();
 		}
-		catch (error) {
-			Zotero.logError(error);
-			Zotero.alert(window, Zotero.getString('general.error'), Zotero.getString('tab-detach-error'));
+		// A tab dropped where nothing took it is torn off into a new window
+		if (!id || dataTransfer.mozUserCancelled || dataTransfer.dropEffect != 'none') {
+			return;
 		}
-		finally {
-			preview?.restore();
-			if (!droppedInOtherWindow && document.hasFocus()) props.onRefocus();
+		// Unless it's dropped on or just below the window's own tab bar
+		let barRect = tabsRef.current.getBoundingClientRect();
+		if (screenX > window.screenX && screenX < window.screenX + window.outerWidth
+				&& screenY > window.screenY
+				&& screenY < window.mozInnerScreenY + barRect.bottom + barRect.height * 1.5) {
+			return;
 		}
+		let { x, y } = tearOffOffsetRef.current;
+		props.onTabTearOff(id, screenX - x, screenY - y);
 	}, [props.onRefocus, props.onTabTearOff]);
 
 	/**

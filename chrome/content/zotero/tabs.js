@@ -29,7 +29,6 @@
 var React = require('react');
 var ReactDOM = require('react-dom');
 import TabBar from 'components/tabBar';
-const { withTimeout } = require('zotero/tabDrag');
 
 // Reduce loaded tabs limit if the system has 8 GB or less memory.
 // TODO: Revise this after upgrading to Zotero 7
@@ -84,8 +83,6 @@ var Zotero_Tabs = new function () {
 	this._tabs = [];
 	this._selectedID = null;
 	this._prevSelectedID = null;
-	this._detachingTabs = new Map();
-	this._transferringTabs = new Map();
 	this._focusOptions = {};
 
 	this._loadableTypes = ['reader', 'note', 'library'];
@@ -121,10 +118,7 @@ var Zotero_Tabs = new function () {
 					preventJumpback: true,
 					window
 				});
-				if (await (reader._openPromise || reader._initPromise) === false
-					&& this._getTab(tab.id).tab === tab && !window.closed) {
-					throw new Error('The document did not initialize in the destination tab');
-				}
+				await reader._initPromise;
 			},
 			note: async (tab, tabIndex, options) => {
 				let editorInstance = await Zotero.Notes.open(tab.data.itemID, options && options.location, {
@@ -215,9 +209,27 @@ var Zotero_Tabs = new function () {
 			}
 		},
 		moveToNewWindow: {
-			library: (tab, _tabIndex, options) => this._moveToNewWindow(tab.id, options),
-			reader: (tab, _tabIndex, options) => this._moveToNewWindow(tab.id, options),
-			note: (tab, _tabIndex, options) => this._moveToNewWindow(tab.id, options)
+			library: async (tab, _tabIndex, { geometry } = {}) => {
+				let { data } = this.tabHooks.transfer.library(tab);
+				// A moved tab isn't reopenable here, and the window it goes to takes focus
+				this.close(tab.id, { skipHistory: true, skipFocus: true });
+				Zotero.openMainWindow({ libraryTabState: data.state, geometry });
+			},
+			reader: async (tab, _tabIndex, { geometry } = {}) => {
+				// A loaded reader is moved into the new window with its document once it opens
+				if (Zotero.Reader.getByTabID(tab.id)?.canMoveToWindow()) {
+					Zotero.openMainWindow({ movedTab: { windowID: this._windowID, tabID: tab.id }, geometry });
+					return;
+				}
+				let { title, data } = this.tabHooks.transfer.reader(tab);
+				this.close(tab.id, { skipHistory: true, skipFocus: true });
+				Zotero.openMainWindow({ readerTabState: { title, ...data }, geometry });
+			},
+			note: async (tab, _tabIndex, { geometry } = {}) => {
+				let { title, data } = this.tabHooks.transfer.note(tab);
+				this.close(tab.id, { skipHistory: true, skipFocus: true });
+				Zotero.openMainWindow({ noteTabState: { title, ...data }, geometry });
+			}
 		},
 		// The data another window needs to recreate the tab, in the form restoreState() takes
 		transfer: {
@@ -230,9 +242,7 @@ var Zotero_Tabs = new function () {
 				};
 			},
 			reader: (tab) => {
-				let { itemID } = tab.data;
-				let secondViewState = Zotero.Reader.getByTabID(tab.id)?.getSecondViewState()
-					|| tab.data.secondViewState;
+				let { itemID, secondViewState } = tab.data;
 				// The reader's own position, since the attachment's saved one may be another
 				// reader's
 				let primaryViewState = Zotero.Reader.getByTabID(tab.id)?.getPrimaryViewState()
@@ -463,7 +473,7 @@ var Zotero_Tabs = new function () {
 		}
 		return extraData;
 	};
-
+	
 	/**
 	 * Whether a 'tab' notification came from this window
 	 *
@@ -475,7 +485,7 @@ var Zotero_Tabs = new function () {
 		let windowID = extraData?.[id]?.windowID;
 		return !windowID || windowID === this._windowID;
 	};
-
+	
 	this._getTab = function (id) {
 		var tabIndex = this._tabs.findIndex(tab => tab.id == id);
 		return { tab: this._tabs[tabIndex], tabIndex };
@@ -1219,149 +1229,52 @@ var Zotero_Tabs = new function () {
 	 * @return {Promise<String|null>} - The id of the tab in the target window, or null if the
 	 *     tab wasn't moved
 	 */
-	this.moveToWindow = function (id, targetWindow, index, transfer = {}) {
-		let pending = this._transferringTabs.get(id);
-		if (pending) {
-			return pending.targetWindow === targetWindow ? pending.operation : Promise.resolve(null);
-		}
-		let operation = this._moveToWindow(id, targetWindow, index, transfer)
-			.finally(() => this._transferringTabs.delete(id));
-		this._transferringTabs.set(id, { targetWindow, operation });
-		return operation;
-	};
-
-	this._moveToWindow = async function (id, targetWindow, index, transfer) {
+	this.moveToWindow = async function (id, targetWindow, index) {
 		let { tab } = this._getTab(id);
-		if (!tab || targetWindow === window || !targetWindow?.Zotero_Tabs) return null;
-		let { tabContentType } = this.parseTabType(tab.type);
-		if (!this._hasHook(tabContentType, 'transfer')) return null;
-		let cancelled = () => transfer.cancelled || targetWindow.closed || window.closed
-			|| this._getTab(id).tab !== tab;
-		let reader = tabContentType == 'reader' ? Zotero.Reader.getByTabID(id) : null;
-		if (reader) await this._flushReaderForTransfer(reader);
-		else if (tabContentType == 'note') {
-			// saveSync returns the database write, which must finish before a new editor reads it.
-			await withTimeout(Zotero.Notes.getByTabID(id)?.saveSync(), 15000);
+		if (!tab || targetWindow === window || !targetWindow.Zotero_Tabs) {
+			return null;
 		}
-		if (cancelled()) return null;
+		let { tabContentType } = this.parseTabType(tab.type);
+		if (!this._hasHook(tabContentType, 'transfer')) {
+			return null;
+		}
 		let newID;
+		// A loaded reader moves with its document, and other tabs are recreated from their data
+		let reader = tabContentType == 'reader' ? Zotero.Reader.getByTabID(id) : null;
 		if (reader?.canMoveToWindow()) {
-			// The reader moves its live document transactionally. No async gap follows the swap.
 			newID = reader.moveToWindow(targetWindow, index);
 		}
 		else {
 			let entry = this._getHook(tabContentType, 'transfer')(tab);
 			newID = await targetWindow.Zotero_Tabs.addTransferredTab(entry, index);
-			if (cancelled()) {
-				if (newID && !targetWindow.closed) {
-					targetWindow.Zotero_Tabs.close(newID, { skipHistory: true, skipWindowClose: true, skipFocus: true });
-				}
-				return null;
-			}
 		}
-		if (!newID) return null;
-		try {
-			this.close(id, { skipHistory: true, skipFocus: true });
+		if (!newID) {
+			return null;
 		}
-		catch (error) {
-			// Ownership has moved; a source cleanup error must not close the destination.
-			Zotero.logError(error);
-		}
-		// Focus failures after commit must never destroy the only remaining view.
-		try {
-			this._tabBarRef.current?.endDrag();
-			targetWindow.focus();
-		}
-		catch (error) {
-			Zotero.logError(error);
-		}
+		// A moved tab isn't reopenable here, and the window it goes to takes focus
+		this.close(id, { skipHistory: true, skipFocus: true });
+		this._tabBarRef.current?.endDrag();
+		targetWindow.focus();
 		return newID;
 	};
 
-	/** Open one main window per source tab, keeping the source until the handoff commits. */
-	this._moveToNewWindow = function (id, { geometry } = {}) {
-		if (this._transferringTabs.has(id)) return this._transferringTabs.get(id).operation;
-		if (this._detachingTabs.has(id)) return this._detachingTabs.get(id);
-		if (!this._getTab(id).tab) return Promise.resolve(null);
-		let operation = (async () => {
-			let destination;
-			let movedTab = { windowID: this._windowID, tabID: id, cancelled: false };
-			try {
-				let ready = new Promise((resolve, reject) => {
-					movedTab.onComplete = resolve;
-					movedTab.onError = reject;
-				});
-				destination = Zotero.openMainWindow({ movedTab, geometry });
-				if (!destination) throw new Error('The destination window did not open');
-				return await withTimeout(ready, 15000);
-			}
-			catch (error) {
-				if (movedTab.completedID) {
-					Zotero.logError(error);
-					return movedTab.completedID;
-				}
-				movedTab.cancelled = true;
-				try {
-					if (destination && !destination.closed) destination.close();
-				}
-				catch (cleanupError) {
-					Zotero.logError(cleanupError);
-				}
-				throw error;
-			}
-		})().finally(() => this._detachingTabs.delete(id));
-		this._detachingTabs.set(id, operation);
-		return operation;
-	};
-
-	this._flushReaderForTransfer = async function (reader) {
-		if (await withTimeout(reader._openPromise || reader._initPromise, 15000) === false) {
-			throw new Error('The source document closed before it could be moved');
-		}
-		const manager = reader._internalReader._annotationManager;
-		const previous = manager._skipAnnotationSavingDebounce;
-		const deadline = Date.now() + 10000;
-		try {
-			manager._skipAnnotationSavingDebounce = true;
-			while (manager._unsavedAnnotations.size || manager._savingInProgress) {
-				if (Date.now() >= deadline) throw new Error('Timed out saving annotations before detaching the tab');
-				await withTimeout(manager._triggerSaving(), 10000);
-				if (manager._savingInProgress) await Zotero.Promise.delay(20);
-			}
-			await withTimeout(reader._flushState(), 15000);
-		}
-		finally {
-			manager._skipAnnotationSavingDebounce = previous;
-		}
-	};
-
-
-	/** Recreate and initialize a transferred tab before its source may be closed. */
+	/**
+	 * Add and select a tab moved from another window
+	 *
+	 * @param {Object} entry - { type, title, data }, as returned by a transfer hook
+	 * @param {Integer} [index]
+	 * @return {Promise<String|null>} - The new tab's id, or null if the tab couldn't be
+	 *     recreated
+	 */
 	this.addTransferredTab = async function (entry, index) {
+		// Keep the tab's state independent of the window it came from
 		entry = JSON.parse(JSON.stringify(entry));
-		if (index === undefined || index > this._tabs.length) index = this._tabs.length;
+		if (index === undefined || index > this._tabs.length) {
+			index = this._tabs.length;
+		}
 		let restoreHook = this._getHook(entry.type, 'restoreState');
 		let result = await restoreHook(Object.assign({ selected: true }, entry), index, {});
-		let id = result?.id;
-		if (!id) return null;
-		try {
-			await withTimeout(this.getLoadPromise(id), 15000);
-			if (entry.type == 'reader') {
-				let reader = Zotero.Reader.getByTabID(id);
-				if (!reader || await withTimeout(reader._openPromise || reader._initPromise, 15000) === false
-					|| await withTimeout(reader._internalReader?._primaryView?.initializedPromise, 15000) === false) {
-					throw new Error('The document did not initialize in the destination tab');
-				}
-			}
-			if (window.closed || !this._getTab(id).tab) throw new Error('The destination tab closed before it was ready');
-			return id;
-		}
-		catch (error) {
-			if (!window.closed && this._getTab(id).tab) {
-				this.close(id, { skipHistory: true, skipWindowClose: true, skipFocus: true });
-			}
-			throw error;
-		}
+		return result?.id || null;
 	};
 
 	/**
@@ -1423,18 +1336,19 @@ var Zotero_Tabs = new function () {
 	this._onTabTearOff = function (id, screenX, screenY) {
 		let { tab, tabIndex } = this._getTab(id);
 		if (!tab) {
-			return Promise.resolve(null);
+			return;
 		}
 		if (this._tabs.length == 1) {
 			window.moveTo(screenX, screenY);
-			return Promise.resolve(id);
+			return;
 		}
 		let { tabContentType } = this.parseTabType(tab.type);
 		if (!this._hasHook(tabContentType, 'moveToNewWindow')) {
-			return Promise.resolve(null);
+			return;
 		}
 		let geometry = { screenX, screenY, width: window.outerWidth, height: window.outerHeight };
-		return this._getHook(tabContentType, 'moveToNewWindow')(tab, tabIndex, { geometry });
+		this._getHook(tabContentType, 'moveToNewWindow')(tab, tabIndex, { geometry })
+			.catch(e => Zotero.logError(e));
 	};
 
 	/**
@@ -1759,7 +1673,7 @@ var Zotero_Tabs = new function () {
 		var { tab } = this._getTab(id || this._selectedID);
 		return !!tab && this._isClosable(tab);
 	};
-
+	
 	/**
 	 * Outside of macOS, the last tab of the last window stays open, so that closing a tab
 	 * doesn't quit the app
@@ -1975,7 +1889,7 @@ var Zotero_Tabs = new function () {
 				menuitem.addEventListener('command', () => {
 					let { tabContentType } = this.parseTabType(tab.type);
 					let moveHook = this._getHook(tabContentType, 'moveToNewWindow');
-					Promise.resolve(moveHook(tab, tabIndex)).catch(e => Zotero.logError(e));
+					moveHook(tab, tabIndex);
 				});
 				menupopup.appendChild(menuitem);
 			}

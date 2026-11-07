@@ -48,8 +48,7 @@ test('macOS tab detachment runs against real reader and note windows in CI', () 
 	// Hosted runners have no staged runtime; obtain the Mac runtime before the
 	// native harness builds the app, just as the Linux release gate does.
 	assert.match(job, /app\/scripts\/fetch_xulrunner -p m/);
-	assert.match(job, /node --test js-build\/test\/tab-drag.test.js/);
-	assert.match(job, /test\/runtests.sh -f -b tabDetach tabPaneLifecycle tabs reader readerContextMenu noteTab noteeditor/);
+	assert.match(job, /test\/runtests.sh -f -b tabPaneLifecycle tabs reader readerContextMenu noteTab noteeditor/);
 });
 
 test('resource overlay preserves keys, endpoints, namespaces, external services and credits', () => {

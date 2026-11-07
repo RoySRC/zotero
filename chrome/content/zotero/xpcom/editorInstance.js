@@ -386,11 +386,8 @@ class EditorInstance {
 			if (noteData) {
 				noteData = JSON.parse(JSON.stringify(noteData));
 			}
-			// Extraction is synchronous; persistence is not. Returning the write
-			// lets tab tear-off wait before a replacement editor reads the note.
-			return this._save(noteData);
+			this._save(noteData);
 		}
-		return undefined;
 	}
 
 	async insertAnnotations(annotations) {
