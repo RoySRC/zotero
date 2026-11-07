@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   macos-tab-detachment:
-    # This gesture is intentionally macOS-only. Linux UI checks cannot exercise
-    # its native window lifecycle, so keep a dedicated macOS regression gate.
+    # Exercise upstream tab transfers with the native macOS window lifecycle,
+    # alongside the reader and note regressions.
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -36,10 +36,9 @@ jobs:
           CI: '1'
         run: |
           npm ci
-          node --test js-build/test/tab-drag.test.js
           app/scripts/fetch_xulrunner -p m
           npm run build
-          test/runtests.sh -f -b tabDetach tabPaneLifecycle tabs reader readerContextMenu noteTab noteeditor
+          test/runtests.sh -f -b tabPaneLifecycle tabs reader readerContextMenu noteTab noteeditor
   windows-installer-isolation:
     runs-on: windows-latest
     timeout-minutes: 15

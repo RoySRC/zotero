@@ -417,7 +417,7 @@
 		//
 		// Methods
 		//
-		notify(event, type, ids) {
+		notify(event, type, ids, extraData) {
 			if (event == 'refresh' && type == 'infobox' && this.item?.id) {
 				this.renderCustomRows(ids);
 				return;
@@ -427,7 +427,7 @@
 				this._forceRenderAll();
 			}
 			if (event === 'select' && type === 'tab' && ids.length > 0) {
-				this._handleTabSelect(ids[0]);
+				this._handleTabSelect(ids[0], extraData);
 			}
 		}
 		
@@ -1894,7 +1894,7 @@
 					if (labelWrapper.nextSibling.contains(document.activeElement)) {
 						// click on label when value field is already focused
 						// will refocus itemTree in library tab or reader content in reader tab
-						if (Zotero_Tabs.selectedType === "library") {
+						if (Zotero_Tabs.selectedIsLibrary) {
 							ZoteroPane.itemsView.focus();
 						}
 						else {
@@ -3367,8 +3367,9 @@
 			}
 		};
 
-		_handleTabSelect = (tabID) => {
-			if (!this.tabID || typeof Zotero_Tabs === 'undefined') {
+		_handleTabSelect = (tabID, extraData) => {
+			if (!this.tabID || typeof Zotero_Tabs === 'undefined'
+					|| !Zotero_Tabs.isOwnTabEvent(extraData, tabID)) {
 				return;
 			}
 			if (tabID !== this.tabID) {

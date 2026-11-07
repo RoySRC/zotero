@@ -74,8 +74,15 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 	this.initialURL; // used by Schema to show the changelog on upgrades
 	this.Promise = BluebirdShimPromise;
 	
+	/**
+	 * The main window a library action should go to -- the most recently activated window
+	 * with a live library view, or the most recent main window if none has one
+	 *
+	 * @return {ChromeWindow|null}
+	 */
 	this.getMainWindow = function () {
-		return Services.wm.getMostRecentWindow("navigator:browser");
+		return this.getActiveZoteroPane()?.document.defaultView
+			|| Services.wm.getMostRecentWindow("navigator:browser");
 	};
 
 	/**
@@ -92,18 +99,18 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 	
 	this.getActiveZoteroPane = function () {
 		var win = Services.wm.getMostRecentWindow("navigator:browser");
+		if (win && !win.ZoteroPane?.libraryView) {
+			// Actions on the library belong in a window that has one
+			let panes = this.getZoteroPanes().filter(pane => pane.libraryView);
+			if (panes.length) {
+				return panes.reduce((a, b) => (b.lastActivated >= a.lastActivated ? b : a));
+			}
+		}
 		return win ? win.ZoteroPane : null;
 	};
 	
 	this.getZoteroPanes = function () {
-		var enumerator = Services.wm.getEnumerator("navigator:browser");
-		var zps = [];
-		while (enumerator.hasMoreElements()) {
-			let win = enumerator.getNext();
-			if (!win.ZoteroPane) continue;
-			zps.push(win.ZoteroPane);
-		}
-		return zps;
+		return this.getMainWindows().filter(win => win.ZoteroPane).map(win => win.ZoteroPane);
 	};
 	
 	/**
@@ -151,6 +158,8 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 	this.hiDPISuffix = "";
 	
 	var _startupErrorHandler;
+	// Replaced with the version at build time
+	var _buildVersion = "{{BUILD_VERSION}}";
 	var _localizedStringBundle;
 	
 	var _locked = false;
@@ -275,6 +284,10 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 			return;
 		}
 		
+		if (!_checkBuildVersion()) {
+			return;
+		}
+		
 		try {
 			await Zotero.DataDirectory.init();
 			if (this.restarting) {
@@ -386,7 +399,7 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 		
 		Services.obs.addObserver({
 			observe: function () {
-				Zotero.Session.save();
+				Zotero.Session.saveFinalState();
 			}
 		}, "quit-application-granted", false);
 		
@@ -1142,12 +1155,39 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 	}
 	
 	
-	this.openMainWindow = function () {
+	/**
+	 * Open a new main window
+	 *
+	 * @param {Object} [args] - Passed to the new window as window.arguments[0]
+	 * @param {Object} [args.sessionState] - The saved session state the window should restore
+	 * @param {Object} [args.libraryTabState] - The view state for the window's library tab, as
+	 *     returned by ZoteroPane.captureLibraryTabState()
+	 * @param {Object[]} [args.otherLibraryTabs] - { title, icon, state } for library tabs to open
+	 *     in the background after the one for libraryTabState
+	 * @param {Object} [args.readerTabState] - { itemID, primaryViewState, secondViewState, title }
+	 *     for a window whose only tab is a reader tab
+	 * @param {Object} [args.noteTabState] - { itemID, title } for a window whose only tab is a
+	 *     note tab
+	 * @param {Object} [args.movedTab] - { windowID, tabID } of a tab in another window to move
+	 *     into this one as its only tab
+	 * @param {Object} [args.geometry] - { screenX, screenY, width, height } to open the window at
+	 * @param {Object} [args.windowSettings] - The window's own settings, as returned by
+	 *     ZoteroPane.getWindowSettings() -- by default, those of the most recent window
+	 * @return {ChromeWindow}
+	 */
+	this.openMainWindow = function (args) {
 		var chromeURI = AppConstants.BROWSER_CHROME_URL;
 		var flags = "chrome,all,dialog=no,resizable=yes";
 		var ww = Components.classes['@mozilla.org/embedcomp/window-watcher;1']
 			.getService(Components.interfaces.nsIWindowWatcher);
-		ww.openWindow(null, chromeURI, '_blank', flags, null);
+		// A new window takes its pane layout and settings from the window it's opened from
+		let sourcePane = Services.wm.getMostRecentWindow("navigator:browser")?.ZoteroPane;
+		sourcePane?.serializePersist();
+		if (sourcePane?.getWindowSettings && !args?.sessionState && !args?.windowSettings) {
+			args = Object.assign({}, args, { windowSettings: sourcePane.getWindowSettings() });
+		}
+		// Box the args so they reliably cross openWindow()'s nsISupports argument
+		return ww.openWindow(null, chromeURI, '_blank', flags, args ? { wrappedJSObject: args } : null);
 	}
 	
 	
@@ -1513,7 +1553,7 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 			
 			// Display as popup progress window
 			if (popup) {
-				var pw = new Zotero.ProgressWindow();
+				var pw = new Zotero.ProgressWindow({ window: win });
 				pw.changeHeadline(Zotero.getString('general.errorHasOccurred'));
 				pw.addDescription(msg);
 				pw.show();
@@ -1986,15 +2026,19 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 	}
 	
 	function _showWindowZoteroPaneOverlay(doc) {
-		doc.getElementById('zotero-collections-tree').disabled = true;
-		doc.getElementById('zotero-items-tree').disabled = true;
+		for (let libraryView of doc.querySelectorAll('library-view')) {
+			libraryView.getElement('zotero-collections-tree').disabled = true;
+			libraryView.getElement('zotero-items-tree').disabled = true;
+		}
 		doc.getElementById('zotero-pane-overlay').hidden = false;
 	}
 	
 	
 	function _hideWindowZoteroPaneOverlay(doc) {
-		doc.getElementById('zotero-collections-tree').disabled = false;
-		doc.getElementById('zotero-items-tree').disabled = false;
+		for (let libraryView of doc.querySelectorAll('library-view')) {
+			libraryView.getElement('zotero-collections-tree').disabled = false;
+			libraryView.getElement('zotero-items-tree').disabled = false;
+		}
 		doc.getElementById('zotero-pane-overlay').hidden = true;
 		
 		// See note in showZoteroPaneProgressMeter()
@@ -2006,9 +2050,8 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 	
 	
 	this.updateQuickSearchBox = function (document) {
-		var searchBox = document.getElementById('zotero-tb-search');
-		if (searchBox) {
-			searchBox.updateMode();
+		for (let libraryView of document.querySelectorAll('library-view')) {
+			libraryView.getElement('zotero-tb-search')?.updateMode();
 		}
 	};
 	
@@ -2163,6 +2206,177 @@ const { CommandLineOptions } = ChromeUtils.importESModule("chrome://zotero/conte
 		
 		return true;
 	}
+	
+	/**
+	 * Make sure the code, the bundled resources, and application.ini are from the same build
+	 *
+	 * If an update was applied incompletely, code from the previous version can run with the new
+	 * version's resources. On a mismatch, invalidate caches and restart, and if the mismatch
+	 * remains, show an error. The versions before and after the restart are sent with the next
+	 * repository check.
+	 *
+	 * @return {Boolean} - False if startup should stop
+	 */
+	function _checkBuildVersion() {
+		// Not a packaged build
+		if (_buildVersion.startsWith('{{')) {
+			return true;
+		}
+		
+		var resourceVersion = null;
+		try {
+			resourceVersion = Zotero.File.getResource('resource://zotero/version').trim();
+		}
+		catch (e) {
+			Zotero.logError(e);
+		}
+		var versions = {
+			js: _buildVersion,
+			resources: resourceVersion,
+			app: Zotero.version
+		};
+		
+		var mismatch = null;
+		try {
+			mismatch = JSON.parse(Zotero.Prefs.get('buildMismatch') || 'null');
+		}
+		catch (e) {
+			Zotero.logError(e);
+		}
+		
+		var [action, newMismatch] = Zotero.getBuildMismatchStartupAction(versions, mismatch);
+		if (action == 'restart') {
+			newMismatch.info = _getBuildMismatchInfo();
+		}
+		if (newMismatch) {
+			Zotero.Prefs.set('buildMismatch', JSON.stringify(newMismatch));
+		}
+		if (action == 'continue') {
+			return true;
+		}
+		Zotero.logError("Build version mismatch: " + JSON.stringify(versions));
+		if (action == 'restart') {
+			Services.appinfo.invalidateCachesOnRestart();
+			Zotero.Utilities.Internal.quit(true);
+			return false;
+		}
+		// Report the mismatch the first time the error is shown, since the regular repository check
+		// won't run
+		if (newMismatch) {
+			_reportBuildMismatch(newMismatch);
+		}
+		Zotero.startupError = Zotero.ftl.formatValueSync(
+			'startup-error-incomplete-update', { domain: ZOTERO_CONFIG.DOMAIN_NAME }
+		);
+		return false;
+	}
+	
+	/**
+	 * Get details of the installation to report with a build mismatch, leaving out any that
+	 * can't be read
+	 */
+	function _getBuildMismatchInfo() {
+		var info = {};
+		var add = (name, fn) => {
+			try {
+				info[name] = fn();
+			}
+			catch (e) {
+				Zotero.logError(e);
+			}
+		};
+		var getModified = file => Math.round(file.lastModifiedTime / 1000);
+		var getLastUpdate = (fileName) => {
+			let file = Services.dirsvc.get('UpdRootD', Ci.nsIFile);
+			file.append(fileName);
+			if (!file.exists()) {
+				return null;
+			}
+			let doc = new DOMParser().parseFromString(
+				Zotero.File.getContents(file, null, 100000), 'text/xml'
+			);
+			let update = doc.querySelector('update');
+			if (!update) {
+				return null;
+			}
+			let patch = update.querySelector('patch[selected="true"]')
+				|| update.querySelector('patch');
+			return {
+				appVersion: update.getAttribute('appVersion'),
+				buildID: update.getAttribute('buildID'),
+				installDate: update.getAttribute('installDate'),
+				statusText: update.getAttribute('statusText'),
+				patchType: patch && patch.getAttribute('type'),
+				patchState: patch && patch.getAttribute('state')
+			};
+		};
+		
+		add('buildID', () => Services.appinfo.appBuildID);
+		add('platformVersion', () => Services.appinfo.platformVersion);
+		add('exeModified', () => getModified(Services.dirsvc.get('XREExeF', Ci.nsIFile)));
+		// The jar the resources are read from, with application.ini in the same directory
+		var jarFile;
+		add('jarModified', () => {
+			let spec = Services.io.getProtocolHandler('resource')
+				.QueryInterface(Ci.nsIResProtocolHandler)
+				.resolveURI(Services.io.newURI('resource://zotero/version'));
+			jarFile = Services.io.newURI(spec).QueryInterface(Ci.nsIJARURI).JARFile
+				.QueryInterface(Ci.nsIFileURL).file;
+			return getModified(jarFile);
+		});
+		add('appIniModified', () => {
+			let file = jarFile.parent;
+			file.append('application.ini');
+			return getModified(file);
+		});
+		add('lastUpdate', () => getLastUpdate('updates.xml'));
+		add('activeUpdate', () => getLastUpdate('active-update.xml'));
+		return info;
+	}
+	
+	/**
+	 * Send a build mismatch to the repository without waiting for a response
+	 */
+	function _reportBuildMismatch(mismatch) {
+		try {
+			let xmlhttp = new XMLHttpRequest();
+			xmlhttp.mozBackgroundRequest = true;
+			xmlhttp.open(
+				'GET',
+				ZOTERO_CONFIG.REPOSITORY_URL + 'updated?mismatch='
+					+ encodeURIComponent(JSON.stringify(mismatch))
+			);
+			xmlhttp.send();
+		}
+		catch (e) {
+			Zotero.logError(e);
+		}
+	}
+	
+	/**
+	 * Decide what to do about the build versions found at startup
+	 *
+	 * @param {Object} versions - { js, resources, app }
+	 * @param {Object|null} mismatch - Stored record of a previous mismatch
+	 * @return {Array} - Action ('continue', 'restart', or 'error') and a new mismatch record to
+	 *     store, or null to leave the stored record as is
+	 */
+	this.getBuildMismatchStartupAction = function (versions, mismatch) {
+		var matches = versions.js == versions.resources && versions.js == versions.app;
+		
+		// First startup after restarting for a mismatch
+		if (mismatch && mismatch.before && !mismatch.after) {
+			return [matches ? 'continue' : 'error', { ...mismatch, after: versions }];
+		}
+		if (matches) {
+			return ['continue', null];
+		}
+		// Already restarted for this mismatch
+		if (mismatch?.after && JSON.stringify(mismatch.after) == JSON.stringify(versions)) {
+			return ['error', null];
+		}
+		return ['restart', { before: versions }];
+	};
 	
 	/**
 	 * Observer for console messages
@@ -2395,7 +2609,7 @@ Zotero.DragDrop = {
 			dragData.data = ids;
 		}
 		else {
-			if (dt.types.includes('application/x-moz-file')) {
+			if (dt.types.includes('Files')) {
 				dragData.dataType = 'application/x-moz-file';
 				var files = [];
 				for (var i = 0; i < len; i++) {
@@ -2445,10 +2659,9 @@ Zotero.DragDrop = {
 		var target = event.target;
 		if (target.tagName == 'treechildren') {
 			var tree = target.parentNode;
-			if (tree.id == 'zotero-collections-tree') {
+			if (tree.classList.contains('zotero-collections-tree')) {
 				let { row } = tree.getCellAt(event.clientX, event.clientY);
-				let win = tree.ownerDocument.defaultView;
-				return win.ZoteroPane.collectionsView.getRow(row);
+				return tree.closest('library-view').collectionsView.getRow(row);
 			}
 		}
 		return false;

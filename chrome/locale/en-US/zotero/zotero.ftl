@@ -168,6 +168,12 @@ menu-view-note-tab-font-size =
 menu-show-tabs-menu =
     .label = Show Tabs Menu
 
+menu-new-library-tab =
+    .label = New Library Tab
+
+menu-new-window =
+    .label = New Window
+
 menu-edit-copy-annotation =
     .label = { $count ->
         [one] Copy Annotation
@@ -243,6 +249,13 @@ items-section-library-sources =
     }
 items-section-library-recently-read = { $library } ({ recently-read })
 items-section-library = { $library }
+collections-menu-open-in-new-tab =
+    .label = { $count ->
+        [one] Open in New Tab
+       *[other] Open in New Tabs
+    }
+collections-menu-open-in-new-window =
+    .label = Open in New Window
 collections-menu-rename =
     .label = Rename
 edit-saved-search = Edit Saved Search
@@ -456,6 +469,8 @@ import-online-relink-kb = { general-more-information }
 import-online-connection-error = { -app-name } could not connect to { $targetApp }. Please check your internet connection and try again.
 
 tab-title-multiple-collections = Multiple
+tabs-reopen-closed-window =
+    .label = Reopen Closed Window
 
 items-table-cell-notes =
     .aria-label = { $count ->
@@ -790,7 +805,7 @@ show-publications-menuitem =
 attachment-info-title = Title
 attachment-info-filename = Filename
 attachment-info-accessed = Accessed
-attachment-info-pages = Pages
+attachment-info-page-count = Page Count
 attachment-info-modified = Modified
 attachment-info-index = Indexed
 attachment-info-convert-note =
@@ -1203,6 +1218,8 @@ data-dir-not-writable = { -app-name } can’t write to { $path }.
 data-dir-use-default-location = You may be able to fix this by using the default location in your home folder instead. If your { -app-name } data is in the current location, move it to the recommended location before selecting “{ $button }”.
 data-dir-check-parent-write-access = Make sure you have write access to { $path } and that security software isn’t preventing { -app-name } from writing to the disk.
 
+startup-error-incomplete-update = A { -app-name } update wasn’t installed completely. Download and reinstall { -app-name } from { $domain }.
+
 login-manager-reset = { -app-name } was unable to read your saved login information, so it has been reset. Please log in again in the { preferences-pane-account } pane of the { -app-name } settings.
 
 login-manager-open-profile-directory = Open Profile Directory
@@ -1377,5 +1394,3 @@ epilib-updates-development = This is a development build. Latest EpiLib release:
 epilib-updates-unavailable = The EpiLib update feed is unavailable. Check your connection or visit the release page. A public release may not have been published yet.
 
 local-api-authorize-text = “{ $appName }”, an application running on your computer, wants to modify your { -app-name } library.
-## Moving a reader or note tab into a separate macOS window
-tab-detach-error = EpiLib could not open this tab in a new window. Your original tab has been kept open. Please try again.

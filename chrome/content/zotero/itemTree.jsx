@@ -32,15 +32,14 @@ const VirtualizedTable = require('components/virtualized-table');
 const { VirtualizedTree, formatColumnName } = VirtualizedTable;
 const { COLUMNS } = require("zotero/itemTreeColumns");
 const { ItemTreeRow } = require('zotero/itemTreeRow');
-const { OS } = ChromeUtils.importESModule("chrome://zotero/content/osfile.mjs");
 const { ZOTERO_CONFIG } = ChromeUtils.importESModule('resource://zotero/config.mjs');
+const { TreePrefs } = ChromeUtils.importESModule('chrome://zotero/content/modules/treePrefs.mjs');
 
 /**
  * @typedef {import("./itemTreeColumns.jsx").ItemTreeColumnOptions} ItemTreeColumnOptions
  */
 
 const CHILD_INDENT = 16;
-const COLUMN_PREFS_FILEPATH = OS.Path.join(Zotero.Profile.dir, "treePrefs.json");
 
 // Migrate unsuffixed `<id>` keys back to `<id>-default`. Earlier 10.0 betas dropped the `-default`
 // suffix from main-library tree IDs, stranding 9.0.x prefs and breaking version switching.
@@ -48,16 +47,7 @@ const COLUMN_PREFS_FILEPATH = OS.Path.join(Zotero.Profile.dir, "treePrefs.json")
 let _treePrefsMigrationPromise = null;
 function _migrateTreePrefsFile() {
 	if (!_treePrefsMigrationPromise) {
-		_treePrefsMigrationPromise = (async () => {
-			let persistSettings;
-			try {
-				let contents = await Zotero.File.getContentsAsync(COLUMN_PREFS_FILEPATH);
-				persistSettings = JSON.parse(contents);
-			}
-			catch {
-				return;
-			}
-			if (!persistSettings || typeof persistSettings !== 'object') return;
+		_treePrefsMigrationPromise = TreePrefs._updateSettings((persistSettings) => {
 			let knownSuffixes = [
 				'-default',
 				...Object.values(Zotero.CollectionTreeRow.visibilityGroups).map(g => '-' + g),
@@ -75,12 +65,8 @@ function _migrateTreePrefsFile() {
 				delete persistSettings[key];
 				changed = true;
 			}
-			if (changed) {
-				await Zotero.File.putContentsAsync(
-					COLUMN_PREFS_FILEPATH, JSON.stringify(persistSettings)
-				);
-			}
-		})();
+			return changed;
+		});
 	}
 	return _treePrefsMigrationPromise;
 }
@@ -939,6 +925,11 @@ var ItemTree = class ItemTree extends LibraryTree {
 		regularOnly: PropTypes.bool,
 		multiSelect: PropTypes.bool,
 		shouldListenForNotifications: PropTypes.bool,
+		// Appended to the DOM id, so that trees sharing a prefs id can coexist in a document
+		domIdSuffix: PropTypes.string,
+		// Whether column prefs should currently be written; the tree's own changes still
+		// apply to it
+		shouldPersistColumnPrefs: PropTypes.func,
 		columns: PropTypes.array,
 		onSelectionChange: PropTypes.func,
 		onContextMenu: PropTypes.func,
@@ -1012,7 +1003,17 @@ var ItemTree = class ItemTree extends LibraryTree {
 		this._setRowProviderUpdateHandler();
 	}
 
+	/**
+	 * The DOM id of the tree, which is the prefs id plus any domIdSuffix
+	 */
 	get id() {
+		return this._id + (this.props.domIdSuffix || '');
+	}
+
+	/**
+	 * The id that column prefs are stored under
+	 */
+	get prefsId() {
 		return this._id;
 	}
 
@@ -1146,7 +1147,10 @@ var ItemTree = class ItemTree extends LibraryTree {
 			Zotero.Prefs.unregisterObserver(id);
 		}
 		this.clearEventListeners();
-		this._writeColumnPrefsToFile(true);
+		// A pending timeout means unsaved column pref changes
+		if (this._writeColumnsTimeout) {
+			this._writeColumnPrefsToFile(true);
+		}
 	}
 
 	componentDidMount() {
@@ -1529,7 +1533,8 @@ var ItemTree = class ItemTree extends LibraryTree {
 					// The row is still not found
 					// Clear the quick search, tag selection, and advanced search
 					// and try again (once)
-					if (!noRecurse && window.ZoteroPane) {
+					let libraryView = this.domEl.closest('library-view');
+					if (!noRecurse && libraryView) {
 						let hasQuickSearch = !!this.collectionTreeRows[0].searchText;
 						let hasTagFilters = this.collectionTreeRows[0].tags?.size > 0;
 						let hasAdvancedSearch = !!this.collectionTreeRows[0].advancedSearch;
@@ -1545,12 +1550,12 @@ var ItemTree = class ItemTree extends LibraryTree {
 							}
 							// Clear tag selection, quicksearch text field, and advanced search
 							// without rerunning search
-							if (window.ZoteroPane.tagSelector) {
-								window.ZoteroPane.tagSelector.clearTagSelection();
+							if (libraryView.tagSelector) {
+								libraryView.tagSelector.clearTagSelection();
 							}
-							window.ZoteroPane.clearQuicksearch(true);
+							libraryView.clearQuicksearch(true);
 							if (hasAdvancedSearch) {
-								await window.ZoteroPane.setAdvancedSearchState('closed', { skipRefresh: true });
+								await libraryView.setAdvancedSearchState('closed', { skipRefresh: true });
 							}
 							// Rerun search and refresh the itemTree
 							await this.refreshAndMaintainSelection();
@@ -1811,6 +1816,24 @@ var ItemTree = class ItemTree extends LibraryTree {
 	}
 	
 	/**
+	 * Get the current scroll position, for passing back to setScrollPosition()
+	 *
+	 * @return {Object|Boolean} - Object with .id (a treeViewID) and .offset, or false if no rows
+	 */
+	getScrollPosition() {
+		return this._saveScrollPosition();
+	}
+	
+	/**
+	 * @param {Object} [scrollPosition] - A position from getScrollPosition()
+	 */
+	setScrollPosition(scrollPosition) {
+		if (scrollPosition) {
+			this._restoreScrollPosition(scrollPosition);
+		}
+	}
+	
+	/**
 	 * Get selected items, omitting collections and searches in the trash
 	 */
 	getSelectedItems(asIDs) {
@@ -1934,21 +1957,13 @@ var ItemTree = class ItemTree extends LibraryTree {
 	 * Base implementation - override in subclasses for full functionality.
 	 */
 	onDragStart(event, index) {
-		// Propagate selection before we set the drag image if dragging not one of the selected rows
-		if (!this.selection.isSelected(index)) {
-			this.selection.select(index);
-		}
-		// Set drag image
-		const dragElems = this.domEl.querySelectorAll('.selected');
-		for (let elem of dragElems) {
-			elem = elem.cloneNode(true);
-			elem.style.position = "initial";
-			this._dragImageContainer.appendChild(elem);
-		}
-
-		let itemIDs = this.getSelectedItems(true);
-		// Get selected item IDs in the item tree order
-		itemIDs = this.getSortedItems(true).filter(id => itemIDs.includes(id));
+		super.onDragStart(event, index);
+		
+		// Get dragged item IDs in the item tree order
+		let itemIDs = this._dragIndices
+			.map(i => this.getRow(i).ref)
+			.filter(o => o instanceof Zotero.Item)
+			.map(o => o.id);
 
 		Zotero.Utilities.Internal.onDragItems(event, itemIDs, this._dragImageContainer);
 	};
@@ -1964,8 +1979,8 @@ var ItemTree = class ItemTree extends LibraryTree {
 		return false;
 	};
 
-	onDragEnd() {
-		this._dragImageContainer.innerHTML = "";
+	onDragEnd(event, index) {
+		super.onDragEnd(event, index);
 		this._dropRow = null;
 		this.tree.invalidate();
 	};
@@ -2481,6 +2496,7 @@ var ItemTree = class ItemTree extends LibraryTree {
 			}
 		}
 		this._columnPrefs = prefs;
+		window.ZoteroPane?.setItemTreeColumnPrefs?.(this.prefsId, prefs);
 		// Invalidate the cached _columns array; next _getColumns() call will
 		// rebuild canonical state from COLUMNS defs + _columnPrefs + viewType.
 		this._columnsId = null;
@@ -2496,14 +2512,35 @@ var ItemTree = class ItemTree extends LibraryTree {
 	
 	_loadColumnPrefsFromFile = async () => {
 		if (!this.props.columnPicker) return;
-		await _migrateTreePrefsFile();
-		try {
-			let columnPrefs = await Zotero.File.getContentsAsync(COLUMN_PREFS_FILEPATH);
-			let persistSettings = JSON.parse(columnPrefs);
-			this._columnPrefs = persistSettings[this.id] || {};
+		// A main window keeps its own column settings, starting with the ones saved most
+		// recently in any window
+		let windowPrefs = window.ZoteroPane?.getItemTreeColumnPrefs?.(this.prefsId);
+		if (windowPrefs) {
+			this._columnPrefs = windowPrefs;
+			return;
 		}
-		catch (e) {
-			this._columnPrefs = {};
+		await _migrateTreePrefsFile();
+		this._columnPrefs = await TreePrefs.get(this.prefsId);
+		window.ZoteroPane?.setItemTreeColumnPrefs?.(this.prefsId, this._columnPrefs);
+	}
+
+	/**
+	 * Reload the column prefs from the shared store and rebuild the columns, so that a tree
+	 * picks up changes made in other trees with the same prefs id
+	 *
+	 * @return {Promise}
+	 */
+	async reloadColumnPrefs() {
+		if (!this.props.columnPicker || this._id === null) return;
+		let before = JSON.stringify(this._columnPrefs || {});
+		await this._loadColumnPrefsFromFile();
+		if (JSON.stringify(this._columnPrefs || {}) == before) return;
+		let sortField = this.getSortField();
+		let sortDirection = this.getSortDirection();
+		this._sortedColumn = null;
+		await this._resetColumns();
+		if (this.getSortField() != sortField || this.getSortDirection() != sortDirection) {
+			await this.sort();
 		}
 	}
 
@@ -2515,24 +2552,16 @@ var ItemTree = class ItemTree extends LibraryTree {
 	 */
 	_writeColumnPrefsToFile = async (force=false) => {
 		if (!this.props.columnPicker) return;
+		if (this.props.shouldPersistColumnPrefs && !this.props.shouldPersistColumnPrefs()) return;
 		await _migrateTreePrefsFile();
 		var writeToFile = async () => {
-			try {
-				let persistSettingsString = await Zotero.File.getContentsAsync(COLUMN_PREFS_FILEPATH);
-				var persistSettings = JSON.parse(persistSettingsString);
-			}
-			catch {
-				persistSettings = {};
-			}
-			persistSettings[this.id] = this._columnPrefs;
-
-			let prefString = JSON.stringify(persistSettings);
-			Zotero.debug(`Writing column prefs of length ${prefString.length} to file ${COLUMN_PREFS_FILEPATH}`);
-
-			return Zotero.File.putContentsAsync(COLUMN_PREFS_FILEPATH, prefString);
+			this._writeColumnsTimeout = null;
+			Zotero.debug(`Writing column prefs of tree ${this.id}`);
+			return TreePrefs.set(this.prefsId, this._columnPrefs);
 		};
 		if (this._writeColumnsTimeout) {
 			clearTimeout(this._writeColumnsTimeout);
+			this._writeColumnsTimeout = null;
 		}
 		if (force) {
 			return writeToFile();

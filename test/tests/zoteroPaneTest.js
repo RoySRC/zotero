@@ -143,6 +143,18 @@ describe("ZoteroPane", function () {
 			await newSearches[0].eraseTx();
 		});
 	});
+
+	describe("Edit menu", function () {
+		it("should label the text-editing commands and set their shortcuts", async function () {
+			await doc.l10n.ready;
+			for (let id of ['menu_undo', 'menu_redo', 'menu_cut', 'menu_copy', 'menu_paste', 'menu_delete', 'menu_selectAll']) {
+				assert.ok(doc.getElementById(id).label, id);
+			}
+			for (let id of ['key_cut', 'key_copy', 'key_paste', 'key_selectAll']) {
+				assert.ok(doc.getElementById(id).getAttribute('key'), id);
+			}
+		});
+	});
 	
 	describe("#itemSelected()", function () {
 		it.skip("should update the item count", function* () {
@@ -1003,7 +1015,36 @@ describe("ZoteroPane", function () {
 			assert.isFalse(cv.getRowIndexByID(id));
 			assert.isFalse(JSON.parse(Zotero.Prefs.get('unfiledLibraries'))[userLibraryID])
 		});
-		
+
+		it("should show and hide a virtual collection in other windows", async function () {
+			await cv.refresh();
+			var id = "U" + userLibraryID;
+			var win2 = await loadZoteroPane();
+			try {
+				let cv2 = win2.ZoteroPane.collectionsView;
+				assert.ok(await cv2.selectByID(id));
+
+				await zp.setVirtual(userLibraryID, 'unfiled', false);
+				await waitForCallback(() => cv2.getRowIndexByID(id) === false, 50, 20);
+				// The hidden row's library is selected in its place
+				await waitForCallback(
+					() => win2.ZoteroPane.getCollectionTreeRows()[0]?.id == "L" + userLibraryID,
+					50,
+					20
+				);
+
+				let collection = await createDataObject('collection');
+				await selectCollection(win2, collection);
+				await zp.setVirtual(userLibraryID, 'unfiled', true);
+				await waitForCallback(() => cv2.getRowIndexByID(id) !== false, 50, 20);
+				// The selection is kept
+				assert.equal(win2.ZoteroPane.getCollectionTreeRows()[0].id, collection.treeViewID);
+			}
+			finally {
+				win2.close();
+			}
+		});
+
 		it("should hide a virtual collection in a group", async function () {
 			await cv.refresh();
 			
@@ -1133,6 +1174,39 @@ describe("ZoteroPane", function () {
 			assert.isTrue(win.document.getElementById('loadReport').disabled);
 
 			await group.eraseTx();
+		});
+		
+		it("should apply to a right-clicked unselected row without selecting it", async function () {
+			let c1 = await createDataObject('collection');
+			let c2 = await createDataObject('collection');
+			await selectCollectionRows(["C" + c1.id]);
+			let cv = zp.collectionsView;
+			let menu = win.document.getElementById('zotero-collectionmenu');
+			let rowEl = cv.tree.getRowElement(cv.getRowIndexByID("C" + c2.id));
+			
+			let shown = new Promise(resolve => menu.addEventListener('popupshown', resolve, { once: true }));
+			rowEl.dispatchEvent(new win.MouseEvent('contextmenu', { bubbles: true, button: 2 }));
+			await shown;
+			assert.equal(zp.getCollectionTreeRows()[0].ref, c1);
+			assert.isTrue(rowEl.classList.contains('target'));
+			
+			let promptService = win.Services.prompt;
+			win.Services.prompt = { confirmEx: () => 0 };
+			try {
+				let hidden = new Promise(resolve => menu.addEventListener('popuphidden', resolve, { once: true }));
+				// Wait for the trash refresh, which comes after the collection is trashed and
+				// reloads the tree
+				let refreshed = waitForNotifierEvent('refresh', 'trash');
+				menu.activateItem(win.document.getElementById('deleteCollection'));
+				await Promise.all([hidden, refreshed]);
+			}
+			finally {
+				win.Services.prompt = promptService;
+			}
+			assert.isTrue(c2.deleted);
+			assert.isFalse(c1.deleted);
+			assert.equal(zp.getCollectionTreeRows()[0].ref, c1);
+			assert.isNull(cv.domEl.querySelector('.row.target'));
 		});
 	});
 
@@ -1875,7 +1949,7 @@ describe("ZoteroPane", function () {
 				}
 			}
 			doc.activeElement.dispatchEvent(shiftTab);
-			assert.equal(doc.activeElement.className, "tab selected");
+			assert.includeMembers([...doc.activeElement.classList], ["tab", "selected"]);
 
 			doc.activeElement.dispatchEvent(shiftTab);
 			// Toggle Item/Context Pane button
@@ -2248,6 +2322,7 @@ describe("ZoteroPane", function () {
 
 			// Right click on the selected collection
 			await zp.collectionsView.selectByID("C" + collectionChild.id);
+			await zp.buildCollectionContextMenu();
 			zp.buildCopyCollectionMenu({});
 
 			// Delay for menus to get disabled
@@ -2258,6 +2333,7 @@ describe("ZoteroPane", function () {
 
 			// Right click on the parent of the copies collection
 			await zp.collectionsView.selectByID("C" + collection.id);
+			await zp.buildCollectionContextMenu();
 			zp.buildCopyCollectionMenu({});
 			// Delay for menus to get disabled
 			await Zotero.Promise.delay();
@@ -2722,6 +2798,19 @@ describe("ZoteroPane", function () {
 			// The button must stay within the items pane rather than overflowing under the item pane
 			assert.isAtMost(advButton.getBoundingClientRect().right, container.getBoundingClientRect().right,
 				"Advanced Search button's right edge is within the items pane");
+		});
+	});
+	
+	describe("#serializePersist()", function () {
+		afterEach(function () {
+			Zotero.Prefs.clear('pane.persist');
+		});
+		
+		it("should keep the library view's saved layout when the window has no library view", function () {
+			Zotero.Prefs.set('pane.persist', JSON.stringify({ 'zotero-collections-pane': { width: '321' } }));
+			zp.serializePersist(null);
+			let values = JSON.parse(Zotero.Prefs.get('pane.persist'));
+			assert.deepEqual(values['zotero-collections-pane'], { width: '321' });
 		});
 	});
 })

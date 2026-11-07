@@ -113,12 +113,20 @@
 					event.stopPropagation();
 					// If there's text in the field, seed the Advanced Search with it,
 					// reproducing the current quick search mode as editable conditions.
-					let mode = Zotero.Prefs.get('search.quicksearch-mode');
-					if (this.value) {
-						ZoteroPane.openAdvancedSearchFromQuickSearch(this.value, mode);
+					let mode = Zotero.Prefs.getForWindow(window, 'search.quicksearch-mode');
+					// Shift-click opens the Advanced Search in a new window, and
+					// Cmd/Ctrl-click in a new tab
+					if (event.shiftKey) {
+						this.closest('library-view').openAdvancedSearchInNewWindow(this.value, mode);
+					}
+					else if (Zotero.isMac ? event.metaKey : event.ctrlKey) {
+						this.closest('library-view').openAdvancedSearchInNewTab(this.value, mode);
+					}
+					else if (this.value) {
+						this.closest('library-view').openAdvancedSearchFromQuickSearch(this.value, mode);
 					}
 					else {
-						ZoteroPane.toggleAdvancedSearchState('open');
+						this.closest('library-view').toggleAdvancedSearchState('open');
 					}
 				});
 				wrapper.appendChild(advancedButton);
@@ -128,13 +136,13 @@
 			
 			this.querySelector('.advanced-collapse-button').addEventListener('command', (event) => {
 				event.stopPropagation();
-				ZoteroPane.toggleAdvancedSearchState('collapsed');
+				this.closest('library-view').toggleAdvancedSearchState('collapsed');
 			});
 			this.querySelector('.advanced-close-button').addEventListener('command', (event) => {
 				event.stopPropagation();
 				// if activated via the keyboard, move focus to the Advanced Search button
 				let triggeredByKeyboard = [MouseEvent.MOZ_SOURCE_KEYBOARD, MouseEvent.MOZ_SOURCE_UNKNOWN].includes(event.inputSource);
-				ZoteroPane.toggleAdvancedSearchState('closed');
+				this.closest('library-view').toggleAdvancedSearchState('closed');
 				if (triggeredByKeyboard) {
 					this.querySelector('#zotero-tb-search-advanced-button').focus();
 				}
@@ -165,7 +173,7 @@
 				item.value = mode;
 
 				item.addEventListener('command', () => {
-					Zotero.Prefs.set("search.quicksearch-mode", mode);
+					Zotero.Prefs.setForWindow(window, "search.quicksearch-mode", mode);
 					this.updateMode();
 
 					if (this.value) {
@@ -185,10 +193,10 @@
 		}
 
 		updateMode() {
-			let mode = Zotero.Prefs.get("search.quicksearch-mode");
+			let mode = Zotero.Prefs.getForWindow(window, "search.quicksearch-mode");
 
 			if (!this._searchModes[mode]) {
-				Zotero.Prefs.set("search.quicksearch-mode", "fields");
+				Zotero.Prefs.setForWindow(window, "search.quicksearch-mode", "fields");
 				mode = 'fields';
 			}
 
@@ -196,7 +204,7 @@
 				.setAttribute('checked', 'true');
 			document.l10n.setAttributes(this.searchTextbox.inputField, "quicksearch-input", { placeholder: this._searchModes[mode] });
 
-			let advancedSearchDeck = document.getElementById('zotero-advanced-search-pane-deck');
+			let advancedSearchDeck = this.closest('library-view')?.getElement('zotero-advanced-search-pane-deck');
 			if (advancedSearchDeck) {
 				let state = advancedSearchDeck.state;
 				let selectedSearchType = advancedSearchDeck.selectedSearchType;

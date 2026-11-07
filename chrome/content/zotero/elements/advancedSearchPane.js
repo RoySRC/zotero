@@ -113,10 +113,32 @@
 		}
 		
 		/**
+		 * The value of the name field, for type "saved"
+		 */
+		get savedSearchName() {
+			return this._nameField.value;
+		}
+		
+		set savedSearchName(name) {
+			this._nameField.value = name || '';
+		}
+		
+		/**
 		 * Whether the search has been submitted and should filter the items list
 		 */
 		get active() {
 			return this._active;
+		}
+		
+		set active(active) {
+			this._active = !!active;
+		}
+		
+		/**
+		 * Fold any in-progress condition edits into the search
+		 */
+		updateSearch() {
+			this._searchElem.updateSearch();
 		}
 		
 		set search(search) {
@@ -188,8 +210,12 @@
 		// collections and/or saved searches selected within a single editable library,
 		// in which case the selection is added to the saved search as scope conditions
 		// (see _addScopeConditions())
+		get _libraryView() {
+			return this.closest('library-view');
+		}
+		
 		_canSaveInSelection() {
-			let collectionTreeRows = ZoteroPane.getCollectionTreeRows();
+			let collectionTreeRows = this._libraryView.getCollectionTreeRows();
 			if (!collectionTreeRows.length) {
 				return false;
 			}
@@ -206,7 +232,7 @@
 
 		refresh() {
 			this._ensureSearch();
-			let libraryID = ZoteroPane.getSelectedLibraryIDs()[0];
+			let libraryID = this._libraryView.collectionsView?.getSelectedLibraryIDs()[0];
 			// Keep the previous library when the selected row doesn't have one (e.g., Feeds)
 			if (libraryID) {
 				this._search.libraryID = libraryID;
@@ -217,7 +243,7 @@
 			// Collection/Saved Search condition, which can only resolve within one library.
 			if (this.type === 'temporary') {
 				let libraryIDs = [];
-				for (let row of ZoteroPane.getCollectionTreeRows()) {
+				for (let row of this._libraryView.getCollectionTreeRows()) {
 					let id = row.ref && row.ref.libraryID;
 					if (id !== undefined && id !== null && !libraryIDs.includes(id)) {
 						libraryIDs.push(id);
@@ -233,7 +259,7 @@
 		}
 
 		async cancel() {
-			await ZoteroPane.setSavedSearchEditorState('closed');
+			await this._libraryView.setSavedSearchEditorState('closed');
 		}
 
 		async submit() {
@@ -243,7 +269,7 @@
 
 			this._searchElem.updateSearch();
 			this._active = true;
-			await ZoteroPane.itemsView.setFilter('advanced-search', this._search);
+			await this._libraryView.itemsView.setFilter('advanced-search', this._search);
 		}
 		
 		async clear() {
@@ -252,7 +278,7 @@
 			}
 
 			this.search = null;
-			await ZoteroPane.itemsView.setFilter('advanced-search', null);
+			await this._libraryView.itemsView.setFilter('advanced-search', null);
 		}
 
 		async save() {
@@ -266,12 +292,11 @@
 				search.fromJSON(this._search.toJSON());
 				search.name = this._nameField.value;
 				await search.saveTx();
-				await ZoteroPane.setSavedSearchEditorState('closed');
-				Zotero_Tabs.rename('zotero-pane', search.name);
+				await this._libraryView.setSavedSearchEditorState('closed');
 				return;
 			}
 
-			let collectionTreeRows = ZoteroPane.getCollectionTreeRows();
+			let collectionTreeRows = this._libraryView.getCollectionTreeRows();
 			if (!this._canSaveInSelection()) {
 				throw new Error('Can only save in an editable library, collection, or saved search');
 			}
@@ -305,7 +330,7 @@
 			}
 			await search.saveTx();
 
-			await ZoteroPane.setAdvancedSearchState('closed');
+			await this._libraryView.setAdvancedSearchState('closed');
 		}
 		
 		// Scope a search to the given collection/saved search rows by adding a top-level

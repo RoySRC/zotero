@@ -1691,6 +1691,25 @@ describe("Zotero.CollectionTree", function () {
 				assert.equal(cv.getRow(newColIndex4).level, cv.getRow(newColIndex1).level);
 			})
 			                                                                                         
+			it("should expand the target collection to reveal an unselected moved collection", async function () {
+				var collectionA = await createDataObject('collection', { name: "A" });
+				await createDataObject('collection', { name: "B", parentKey: collectionA.key });
+				var collectionC = await createDataObject('collection', { name: "C" });
+				var collectionD = await createDataObject('collection', { name: "D" });
+				var indexA = cv.getRowIndexByID('C' + collectionA.id);
+				if (cv.isContainerOpen(indexA)) {
+					await cv.toggleOpenState(indexA);
+				}
+				await select(win, collectionD);
+				
+				await onDrop('collection', 'C' + collectionA.id, [collectionC.id], Promise.resolve());
+				
+				assert.equal(collectionC.parentID, collectionA.id);
+				assert.isTrue(cv.isContainerOpen(cv.getRowIndexByID('C' + collectionA.id)));
+				assert.notStrictEqual(cv.getRowIndexByID('C' + collectionC.id), false);
+				assert.equal(zp.getCollectionTreeRows()[0].ref, collectionD);
+			});
+			
 			it("should move a subcollection and its subcollection down under another collection", async function () {
 				var collectionA = await createDataObject('collection', { name: "A" });
 				var collectionB = await createDataObject('collection', { name: "B", parentKey: collectionA.key });
@@ -2059,7 +2078,8 @@ describe("Zotero.CollectionTree", function () {
 			// Display the collection search bar
 			win.document.getElementById("zotero-tb-collections-search").click();
 			// Do not hide the search panel on blur
-			win.document.getElementById("zotero-collections-search").removeEventListener('blur', zp.hideCollectionSearch);
+			win.document.getElementById("zotero-collections-search")
+				.removeEventListener('blur', zp.libraryView.handleCollectionSearchBlur);
 
 			feed1 = await createFeed({ name: "feed_1 " });
 			feed2 = await createFeed({ name: "feed_2" });

@@ -31,17 +31,232 @@ var { FilePicker } = ChromeUtils.importESModule('chrome://zotero/content/modules
  */
 var ZoteroPane = new function () {
 	var _unserialized = false;
-	this.collectionsView = false;
-	this.itemsView = false;
-	this.itemPane = false;
 	this.progressWindow = false;
 	this._listeners = {};
 	this.__defineGetter__('loaded', function () { return _loaded; });
-	var _lastSelectedItems = [];
-	// [element, listener] for the collection tree focus listener added in initCollectionsTree()
-	var _collectionsTreeFocusListener = null;
+	// The window's library views, in creation order. The first is the primary view, which
+	// keeps the base element ids.
+	var _libraryViews = [];
+	// The active library view -- the one in the selected library tab, or the most recently
+	// selected one -- which the view accessors below resolve to
+	var _activeLibraryView = null;
+	this.__defineGetter__('libraryView', function () {
+		return _activeLibraryView;
+	});
+	this.__defineGetter__('primaryLibraryView', function () {
+		return _libraryViews[0] || null;
+	});
+	this.__defineGetter__('libraryViews', function () {
+		return _libraryViews.slice();
+	});
+	/**
+	 * @param {String} tabID
+	 * @return {LibraryView|null}
+	 */
+	this.getLibraryView = function (tabID) {
+		return _libraryViews.find(view => view.tabID === tabID) || null;
+	};
+	/**
+	 * The library view an action on a given library should act on -- the active view if it
+	 * shows the library, else the most recently selected view that does, else the active view
+	 *
+	 * @param {Integer} libraryID
+	 * @return {LibraryView|null} - null if the window has no loaded library view
+	 */
+	this.getLibraryViewForLibrary = function (libraryID) {
+		let showsLibrary = (view) => {
+			return !!view.collectionsView?.getSelectedLibraryIDs().includes(libraryID);
+		};
+		let loadedViews = _libraryViews.filter(view => view.loaded);
+		let activeView = loadedViews.includes(this.libraryView) ? this.libraryView : null;
+		if (activeView && showsLibrary(activeView)) {
+			return activeView;
+		}
+		let matchingViews = loadedViews.filter(showsLibrary);
+		if (matchingViews.length) {
+			return matchingViews.reduce((a, b) => {
+				let timeA = Zotero_Tabs._getTab(a.tabID).tab?.timeSelected || 0;
+				let timeB = Zotero_Tabs._getTab(b.tabID).tab?.timeSelected || 0;
+				return timeB >= timeA ? b : a;
+			});
+		}
+		return activeView;
+	};
+	/**
+	 * The library view for a library, opening a library tab if the window has no loaded view
+	 *
+	 * @param {Integer} libraryID
+	 * @return {Promise<LibraryView|null>}
+	 */
+	this.openLibraryViewForLibrary = async function (libraryID) {
+		let view = this.getLibraryViewForLibrary(libraryID);
+		if (!view) {
+			Zotero_Tabs.selectLibraryTab();
+			view = await this.waitForLibraryView(Zotero_Tabs.selectedID);
+		}
+		return view;
+	};
+	/**
+	 * Wait for a library tab's view to be created and to finish restoring its state
+	 *
+	 * @param {String} tabID
+	 * @return {Promise<LibraryView|null>}
+	 */
+	this.waitForLibraryView = async function (tabID) {
+		await Zotero_Tabs.getLoadPromise(tabID);
+		let view = this.getLibraryView(tabID);
+		await view?.waitForLibraryTabState();
+		return view;
+	};
+	/**
+	 * Called by a library view when it's connected to the document
+	 */
+	this.registerLibraryView = function (view) {
+		if (!_libraryViews.includes(view)) {
+			_libraryViews.push(view);
+		}
+		if (!_activeLibraryView) {
+			_activeLibraryView = view;
+		}
+	};
+	/**
+	 * Called when a library view's tab is closed or the view is disconnected
+	 */
+	this.unregisterLibraryView = function (view) {
+		let index = _libraryViews.indexOf(view);
+		if (index != -1) {
+			_libraryViews.splice(index, 1);
+		}
+		if (_activeLibraryView === view) {
+			// Fall back to the most recently selected remaining view
+			_activeLibraryView = _libraryViews.reduce((a, b) => {
+				let timeA = Zotero_Tabs._getTab(a?.tabID).tab?.timeSelected || 0;
+				let timeB = Zotero_Tabs._getTab(b.tabID).tab?.timeSelected || 0;
+				return timeB >= timeA ? b : a;
+			}, null);
+		}
+		if (!_libraryViews.length) {
+			// Nothing left for the library commands to act on
+			this._updateEnabledActionsForCollectionTreeRows([]);
+			this.updateQuickCopyCommands([]);
+			Zotero.Plugins.notifyMainWindowUnload(window);
+		}
+	};
+	/**
+	 * Make a library view the active one, which ZoteroPane's library view properties and
+	 * methods and the command state follow
+	 *
+	 * @param {LibraryView} view
+	 */
+	this.setActiveLibraryView = function (view) {
+		if (_activeLibraryView === view) {
+			return;
+		}
+		_activeLibraryView = view;
+		let collectionTreeRows = view.getCollectionTreeRows();
+		if (collectionTreeRows.length) {
+			this._updateEnabledActionsForCollectionTreeRows(collectionTreeRows);
+			Zotero.Prefs.set('lastViewedFolder', collectionTreeRows[0].id);
+		}
+		if (view.itemsView?.selection) {
+			this.updateQuickCopyCommands(view.itemsView.getSelectedObjects());
+		}
+	};
+	/**
+	 * Update the item pane of a library view for its item selection
+	 *
+	 * @param {Object} [_selection] - Unused
+	 * @param {LibraryView} [view] - The view whose selection changed; defaults to the
+	 *     active view
+	 * @return {Promise<Boolean>}
+	 */
+	this.itemSelected = function (_selection, view) {
+		return (view || this.libraryView)?.itemSelected();
+	};
+	/**
+	 * The collection tree rows selected in the active library view
+	 *
+	 * @return {Zotero.CollectionTreeRow[]}
+	 */
+	this.getCollectionTreeRows = function () {
+		return this.libraryView?.getCollectionTreeRows() || [];
+	};
+	// These view properties and the methods below forward to the window's active library view,
+	// resolving it at each access. Async code that should stay in the view it started in must
+	// capture the view before awaiting and use it throughout:
+	//
+	//   let libraryView = this.libraryView;
+	//   await ...;
+	//   libraryView.itemsView.selectItems(ids);
+	for (let member of ['collectionsView', 'itemsView', 'itemPane', 'tagSelector']) {
+		this.__defineGetter__(member, function () {
+			return this.libraryView?.[member] ?? null;
+		});
+		this.__defineSetter__(member, function (val) {
+			if (this.libraryView) {
+				this.libraryView[member] = val;
+			}
+		});
+	}
+	for (let method of [
+		'initContainers',
+		'uninitContainers',
+		'initTagSelector',
+		'initCollectionTreeSearch',
+		'toggleTagSelector',
+		'tagSelectorShown',
+		'updateTagSelectorViewSettingsMenu',
+		'handleTagSelectorResize',
+		'setTagScope',
+		'updateTagFilter',
+		'onCollectionSelected',
+		'setAdvancedSearchState',
+		'toggleAdvancedSearchState',
+		'openAdvancedSearchFromQuickSearch',
+		'openAdvancedSearchInNewWindow',
+		'openAdvancedSearchInNewTab',
+		'setSavedSearchEditorState',
+		'captureLibraryTabState',
+		'restoreLibraryTabState',
+		'waitForLibraryTabState',
+		'search',
+		'handleSearchKeypress',
+		'clearQuicksearch',
+		'hideCollectionSearch',
+		'handleCollectionSearchInput',
+		'setItemsPaneMessage',
+		'clearItemsPaneMessage',
+	]) {
+		this[method] = function (...args) {
+			return this.libraryView?.[method](...args);
+		};
+	}
+	// Resolved once the window has opened its tabs, which is the last step of loading the pane
+	var _loadedDeferred = Zotero.Promise.defer();
+	this.loadedPromise = _loadedDeferred.promise;
+	var _progressQueueListeners = [];
+	// The saved session state this window restores, if any
+	var _sessionPaneState = null;
+	// Whether this window has restored its saved session state, after which it saves its own
+	var _sessionPaneStateRestored = false;
+	// Saved session states this window opens other windows for once it has restored its own
+	var _otherSessionPaneStates = [];
+	// The view state this window's library tab starts with, if it was opened with one
+	var _initialLibraryTabState = null;
+	// Library tabs this window opens in the background after its first one
+	var _initialOtherLibraryTabs = [];
+	// The reader tab this window was opened for, if any
+	var _initialReaderTabState = null;
+	var _initialNoteTabState = null;
+	var _initialMovedTab = null;
+	// Settings this window keeps for itself (see getWindowSetting())
+	var _windowSettings = normalizeWindowSettings();
+	// Observers of the prefs behind this window's settings, by pref name
+	var _windowSettingObservers = new Map();
 	var lastFocusedElement = null;
 	this.lastKeyPress = null;
+	// When this window was last activated, for ordering saved window states
+	this.lastActivated = 0;
 	
 	//Privileged methods
 	this.destroy = destroy;
@@ -53,8 +268,6 @@ var ZoteroPane = new function () {
 	this.getSelectedSavedSearch = getSelectedSavedSearch;
 	this.getSortField = getSortField;
 	this.getSortDirection = getSortDirection;
-	this.setItemsPaneMessage = setItemsPaneMessage;
-	this.clearItemsPaneMessage = clearItemsPaneMessage;
 	this.viewSelectedAttachment = viewSelectedAttachment;
 	this.reportErrors = reportErrors;
 	
@@ -97,13 +310,17 @@ var ZoteroPane = new function () {
 				Zotero.ProgressQueues.get(progressQueue.getID()).getDialog().open();
 			}, false);
 			
-			progressQueue.addListener('empty', function () {
+			let emptyListener = function () {
 				button.hidden = true;
-			});
+			};
+			progressQueue.addListener('empty', emptyListener);
+			_progressQueueListeners.push([progressQueue, 'empty', emptyListener]);
 			
-			progressQueue.addListener('nonempty', function () {
+			let nonemptyListener = function () {
 				button.hidden = false;
-			});
+			};
+			progressQueue.addListener('nonempty', nonemptyListener);
+			_progressQueueListeners.push([progressQueue, 'nonempty', nonemptyListener]);
 			
 			progressQueueButtons.appendChild(button);
 		}
@@ -114,14 +331,8 @@ var ZoteroPane = new function () {
 		// than inserting at 0) ensures text-editing controllers take priority.
 		window.controllers.appendController(Zotero.UndoHistory.getController(document));
 
-		var zp = document.getElementById('zotero-pane');
-		Zotero.UIProperties.registerRoot(zp);
-		zp.addEventListener('UIPropertiesChanged', () => {
-			this.collectionsView?.updateFontSize();
-			this.itemsView?.updateFontSize();
-		});
 		Zotero.UIProperties.registerRoot(document.getElementById('zotero-context-pane'));
-		this.itemPane = document.querySelector("#zotero-item-pane");
+		Zotero.UIProperties.registerRoot(document.getElementById('zotero-banners'));
 		ZoteroPane_Local.updateLayout();
 		this.updateWindow();
 		window.addEventListener("resize", () => {
@@ -159,6 +370,11 @@ var ZoteroPane = new function () {
 			this.setAttribute("aria-description", lastSync || "");
 		});
 		
+		this.lastActivated = Date.now();
+		window.addEventListener('activate', () => {
+			ZoteroPane.lastActivated = Date.now();
+		});
+		
 		// register an observer for Zotero reload
 		observerService = Components.classes["@mozilla.org/observer-service;1"]
 					.getService(Components.interfaces.nsIObserverService);
@@ -169,93 +385,89 @@ var ZoteroPane = new function () {
 		// continue loading pane
 		_loadPane();
 		setUpKeyboardNavigation();
+		// The sort keys act on the window's active view
+		ItemTreeMenuBar.setItemTreeSortKeys(() => ZoteroPane.itemsView);
 	};
 
+	// Handle focusing based on a given event and a mapping of event targets + keys
+	// to the focus destinations
+	this.moveFocusForActionsMap = function (actionsMap, event, verticalArrowIsTab = false) {
+		var key = event.key;
+		if (key === 'Tab' && modifierIsNotShift(event)) return;
+
+		if (event.shiftKey) {
+			key = 'Shift' + key;
+		}
+		// ArrowUp or ArrowDown act the same way as as
+		// shift-tab/tab unless it is on a menu, in which case
+		// it'll open the menu popup
+		let isMenu = event.target.getAttribute('type') === 'menu'
+					|| event.originalTarget?.getAttribute('type') === 'menu';
+		if (isMenu && ['ArrowUp', 'ArrowDown'].includes(key)) {
+			return;
+		}
+		let onInput = event.originalTarget.tagName.toLowerCase() == "input";
+		if (verticalArrowIsTab && key == 'ArrowUp' && !onInput) {
+			key = 'ShiftTab';
+		}
+		else if (verticalArrowIsTab && key == 'ArrowDown' && !onInput) {
+			key = 'Tab';
+		}
+		if (key == Zotero.arrowPreviousKey) {
+			key = 'ArrowPrevious';
+		}
+		else if (key == Zotero.arrowNextKey) {
+			key = 'ArrowNext';
+		}
+		// Fetch the focusFunction by target id
+		let focusFunction = actionsMap[event.target.id]?.[key];
+		// If no function found by target id, try to search by class names
+		if (focusFunction === undefined) {
+			for (let className of event.target.classList) {
+				focusFunction = actionsMap[className]?.[key];
+				if (focusFunction) break;
+			}
+		}
+		// If the focusFunction is undefined, nothing was found
+		// for this combination of keys, so do nothing
+		if (focusFunction === undefined) {
+			return;
+		}
+		// Otherwise, fetch the target to focus on
+		let target = focusFunction(event);
+		// If returned target is false, focusing was not handled,
+		// so fallback to default focus target
+		if (target === false) {
+			return;
+		}
+		// If target is undefined, the actionsMap's function
+		// handled focus by itself (e.g. by calling .click)
+		if (target) {
+			// If desired target is hidden/disabled, create a fake event
+			// and dispatch it on the hidden target to rerun moveFocus
+			// and place focus on the next non-hidden node
+			if (target.disabled || target.hidden || target.parentNode.hidden
+					|| getComputedStyle(target).display === 'none') {
+				event.target = target;
+				let fakeEventCopy = new KeyboardEvent('keydown', {
+					key: event.key,
+					shiftKey: event.shiftKey,
+					bubbles: true
+				});
+				target.dispatchEvent(fakeEventCopy);
+				event.preventDefault();
+				event.stopPropagation();
+				return;
+			}
+			target.focus();
+		}
+		event.preventDefault();
+		event.stopPropagation();
+	};
+	
 	function setUpKeyboardNavigation() {
-		let collectionTreeToolbar = document.getElementById("zotero-toolbar-collection-tree");
-		let itemTreeToolbar = document.getElementById("zotero-toolbar-item-tree");
+		let moveFocus = ZoteroPane.moveFocusForActionsMap;
 		let titleBar = document.getElementById("zotero-title-bar");
-		let itemTree = document.getElementById("zotero-items-tree");
-		let collectionsTree = document.getElementById("zotero-collections-tree");
-		let tagSelector = document.getElementById("zotero-tag-selector");
-		let tagContainer = document.getElementById('zotero-tag-selector-container');
-		let collectionsPane = document.getElementById("zotero-collections-pane");
-
-		// function to handle actual focusing based on a given event
-		// and a mapping of event targets + keys to the focus destinations
-		let moveFocus = function (actionsMap, event, verticalArrowIsTab = false) {
-			var key = event.key;
-			if (key === 'Tab' && modifierIsNotShift(event)) return;
-
-			if (event.shiftKey) {
-				key = 'Shift' + key;
-			}
-			// ArrowUp or ArrowDown act the same way as as
-			// shift-tab/tab unless it is on a menu, in which case
-			// it'll open the menu popup
-			let isMenu = event.target.getAttribute('type') === 'menu'
-						|| event.originalTarget?.getAttribute('type') === 'menu';
-			if (isMenu && ['ArrowUp', 'ArrowDown'].includes(key)) {
-				return;
-			}
-			let onInput = event.originalTarget.tagName.toLowerCase() == "input";
-			if (verticalArrowIsTab && key == 'ArrowUp' && !onInput) {
-				key = 'ShiftTab';
-			}
-			else if (verticalArrowIsTab && key == 'ArrowDown' && !onInput) {
-				key = 'Tab';
-			}
-			if (key == Zotero.arrowPreviousKey) {
-				key = 'ArrowPrevious';
-			}
-			else if (key == Zotero.arrowNextKey) {
-				key = 'ArrowNext';
-			}
-			// Fetch the focusFunction by target id
-			let focusFunction = actionsMap[event.target.id]?.[key];
-			// If no function found by target id, try to search by class names
-			if (focusFunction === undefined) {
-				for (let className of event.target.classList) {
-					focusFunction = actionsMap[className]?.[key];
-					if (focusFunction) break;
-				}
-			}
-			// If the focusFunction is undefined, nothing was found
-			// for this combination of keys, so do nothing
-			if (focusFunction === undefined) {
-				return;
-			}
-			// Otherwise, fetch the target to focus on
-			let target = focusFunction(event);
-			// If returned target is false, focusing was not handled,
-			// so fallback to default focus target
-			if (target === false) {
-				return;
-			}
-			// If target is undefined, the actionsMap's function
-			// handled focus by itself (e.g. by calling .click)
-			if (target) {
-				// If desired target is hidden/disabled, create a fake event
-				// and dispatch it on the hidden target to rerun moveFocus
-				// and place focus on the next non-hidden node
-				if (target.disabled || target.hidden || target.parentNode.hidden
-						|| getComputedStyle(target).display === 'none') {
-					event.target = target;
-					let fakeEventCopy = new KeyboardEvent('keydown', {
-						key: event.key,
-						shiftKey: event.shiftKey,
-						bubbles: true
-					});
-					target.dispatchEvent(fakeEventCopy);
-					event.preventDefault();
-					event.stopPropagation();
-					return;
-				}
-				target.focus();
-			}
-			event.preventDefault();
-			event.stopPropagation();
-		};
 
 		titleBar.addEventListener("keydown", (event) => {
 			let cmdOrCtrlOnly = e => (Zotero.isMac ? (e.metaKey && !e.ctrlKey) : e.ctrlKey) && !e.shiftKey && !e.altKey;
@@ -319,189 +531,6 @@ var ZoteroPane = new function () {
 			};
 			moveFocus(actionsMap, event, true);
 		});
-
-		let collectionsSearchField = document.getElementById("zotero-collections-search");
-		let clearCollectionSearch = () => {
-			// If empty filter - just focus the collectionTree
-			if (collectionsSearchField.value.length == 0) {
-				return document.getElementById("collection-tree");
-			}
-			// Clear the search field and focus collection tree
-			if (collectionsSearchField.value.length) {
-				collectionsSearchField.value = '';
-				ZoteroPane.collectionsView.setFilter("", true);
-			}
-			ZoteroPane.hideCollectionSearch();
-			return null;
-		};
-		let focusCollectionTree = () => {
-			// Prevent Enter/Tab pressed before the filtering ran from doing anything
-			if (!ZoteroPane.collectionsView.filterEquals(collectionsSearchField.value)) {
-				return null;
-			}
-			// If the current row passes the filter, make sure it is visible and focus collectionTree
-			if (ZoteroPane.collectionsView.focusedRowMatchesFilter()) {
-				ZoteroPane.collectionsView.ensureRowIsVisible(ZoteroPane.collectionsView.selection.focused);
-				return document.getElementById('collection-tree');
-			}
-			// Otherwise, focus the first row passing the filter
-			ZoteroPane.collectionsView.focusFirstMatchingRow(false);
-			return null;
-		};
-		collectionTreeToolbar.addEventListener("keydown", (event) => {
-			let actionsMap = {
-				'zotero-tb-collection-add': {
-					ArrowNext: () => null,
-					ArrowPrevious: () => null,
-					Tab: () => document.getElementById('zotero-tb-collections-search').click(),
-					ShiftTab: () => document.getElementById('zotero-tb-sync')
-				},
-				'zotero-collections-search': {
-					Tab: focusCollectionTree,
-					ShiftTab: () => document.getElementById('zotero-tb-collection-add'),
-					Enter: focusCollectionTree,
-					Escape: clearCollectionSearch
-				},
-			};
-			moveFocus(actionsMap, event, true);
-		});
-
-		itemTreeToolbar.addEventListener("keydown", (event) => {
-			let actionsMap = {
-				'zotero-tb-add': {
-					ArrowNext: () => document.getElementById("zotero-tb-lookup"),
-					ArrowPrevious: () => null,
-					Tab: () => document.getElementById("zotero-tb-search").focus(),
-					ShiftTab: () => {
-						if (collectionsPane.hasAttribute("collapsed")) {
-							return document.getElementById('zotero-tb-sync');
-						}
-						if (tagContainer.hasAttribute('collapsed')) {
-							return focusCollectionTree();
-						}
-						return document.querySelector("#zotero-tag-selector button");
-					}
-				},
-				'zotero-tb-lookup': {
-					ArrowNext: () => document.getElementById("zotero-tb-attachment-add"),
-					ArrowPrevious: () => document.getElementById("zotero-tb-add"),
-					Tab: () => document.getElementById("zotero-tb-search").focus(),
-					ShiftTab: () => document.getElementById('zotero-tb-collections-search').click(),
-					Enter: () => Zotero_Lookup.showPanel(event.target),
-					' ': () => Zotero_Lookup.showPanel(event.target)
-				},
-				'zotero-tb-attachment-add': {
-					ArrowNext: () => document.getElementById("zotero-tb-note-add"),
-					ArrowPrevious: () => document.getElementById("zotero-tb-lookup"),
-					Tab: () => document.getElementById("zotero-tb-search").focus(),
-					ShiftTab: () => document.getElementById('zotero-tb-collections-search').click()
-				},
-				'zotero-tb-note-add': {
-					ArrowNext: () => null,
-					ArrowPrevious: () => document.getElementById("zotero-tb-attachment-add"),
-					Tab: () => document.getElementById("zotero-tb-search").focus(),
-					ShiftTab: () => document.getElementById('zotero-tb-collections-search').click()
-				},
-				'zotero-tb-search-dropmarker': {
-					ArrowNext: () => null,
-					ArrowPrevious: () => null,
-					Tab: () => document.getElementById("zotero-tb-search-textbox"),
-					ShiftTab: () => document.getElementById('zotero-tb-add')
-				},
-				'advanced-collapse-button': {
-					ShiftTab: () => document.getElementById('zotero-tb-add')
-				},
-				'zotero-tb-search-textbox': {
-					Tab: () => document.getElementById("zotero-tb-search-advanced-button"),
-					ShiftTab: () => document.getElementById("zotero-tb-search").focus()
-				},
-				'zotero-tb-search-advanced-button': {
-					Tab: () => document.getElementById("zotero-tb-toggle-item-pane-stacked"),
-					ShiftTab: () => document.getElementById("zotero-tb-search-textbox")
-				},
-				'zotero-tb-toggle-item-pane-stacked': {
-					Tab: () => itemTree.querySelector(".virtualized-table"),
-					ShiftTab: () => document.getElementById("zotero-tb-search-advanced-button")
-				},
-			};
-			moveFocus(actionsMap, event, true);
-		});
-
-		collectionsTree.addEventListener("keydown", (event) => {
-			let actionsMap = {
-				'collection-tree': {
-					ShiftTab: () => document.getElementById('zotero-tb-collections-search').click(),
-					Tab: () => {
-						if (tagContainer.hasAttribute('collapsed')) {
-							return document.getElementById('zotero-tb-add');
-						}
-						// If tag selector is collapsed, go to "New item" button, otherwise focus tag selector
-						if (ZoteroPane.tagSelector.isTagListEmpty()) {
-							return tagSelector.querySelector(".search-input");
-						}
-						ZoteroPane.tagSelector.focusTagList();
-						return null;
-					},
-					Escape: clearCollectionSearch
-				}
-			};
-			moveFocus(actionsMap, event);
-		});
-
-		itemTree.addEventListener("keydown", (event) => {
-			let actionsMap = {
-				// The item tree's DOM id has a view-specific suffix, so key on the current view's id
-				[ZoteroPane.itemsView?.id]: {
-					ShiftTab: () => {
-						let advancedSearchDeck = document.getElementById('zotero-advanced-search-pane-deck');
-						// Advanced Search open - focus the last focusable element of the deck
-						if (advancedSearchDeck?.state === 'open') {
-							Services.focus.moveFocus(
-								window,
-								document.getElementById('zotero-items-pane'),
-								Services.focus.MOVEFOCUS_BACKWARD,
-								0
-							);
-							return null;
-						}
-						// Advanced Search collapsed - focus the close button
-						if (advancedSearchDeck?.state === 'collapsed') {
-							return document.querySelector('#zotero-tb-search .advanced-close-button');
-						}
-						return document.getElementById('zotero-tb-toggle-item-pane-stacked');
-					}
-				}
-			};
-			moveFocus(actionsMap, event);
-		});
-
-		tagSelector.addEventListener("keydown", (e) => {
-			let actionsMap = {
-				'search-input': {
-					Tab: () => tagSelector.querySelector('.tag-selector-actions'),
-					ShiftTab: () => {
-						if (ZoteroPane.tagSelector.isTagListEmpty()) {
-							return document.getElementById("collection-tree");
-						}
-						ZoteroPane.tagSelector.focusTagList();
-						return null;
-					},
-				},
-				'tag-selector-item': {
-					Tab: () => tagSelector.querySelector(".search-input"),
-					ShiftTab: () => document.getElementById("collection-tree"),
-				},
-				'tag-selector-actions': {
-					Tab: () => document.getElementById('zotero-tb-add'),
-					ShiftTab: () => tagSelector.querySelector(".search-input")
-				},
-				'tag-selector-list': {
-					Tab: () => tagSelector.querySelector(".search-input"),
-					ShiftTab: () => document.getElementById("collection-tree"),
-				}
-			};
-			moveFocus(actionsMap, e);
-		});
 	}
 
 	function addFocusHandlers() {
@@ -532,11 +561,211 @@ var ZoteroPane = new function () {
 	}
 
 	/**
+	 * Whether this is the first main window in the process to take on a piece of startup work,
+	 * so that opening another window doesn't repeat it
+	 *
+	 * @param {String} id
+	 * @return {Boolean}
+	 */
+	function claimStartupTask(id) {
+		if (!Zotero.startupTasks) {
+			Zotero.startupTasks = new Set();
+		}
+		if (Zotero.startupTasks.has(id)) {
+			return false;
+		}
+		Zotero.startupTasks.add(id);
+		return true;
+	}
+	
+	
+	/**
+	 * The arguments the window was opened with, as passed to Zotero.openMainWindow()
+	 *
+	 * @return {Object}
+	 */
+	function getWindowArgs() {
+		let args = window.arguments && window.arguments[0];
+		if (args && args.wrappedJSObject) {
+			args = args.wrappedJSObject;
+		}
+		return args && typeof args == 'object' ? args : {};
+	}
+	
+	
+	/**
+	 * The saved session state this window is opening with, until it has restored it
+	 *
+	 * @return {Object|null}
+	 */
+	function getUnrestoredSessionState() {
+		if (_sessionPaneStateRestored) {
+			return null;
+		}
+		return _sessionPaneState || getWindowArgs().sessionState || null;
+	}
+	
+	
+	/**
+	 * Take on the saved session state or the library view this window was opened for
+	 *
+	 * The first window opened while no other main window is open, at startup or after the last
+	 * one was closed, restores the first saved state and opens a window for each of the others.
+	 * Other windows opened by the user don't restore anything.
+	 */
+	function takeWindowState() {
+		let args = getWindowArgs();
+		_windowSettings = normalizeWindowSettings(args.windowSettings);
+		// Where a tab torn off from another window was dropped
+		if (args.geometry) {
+			restoreWindowGeometry(args.geometry);
+		}
+		if (args.libraryTabState) {
+			_initialLibraryTabState = args.libraryTabState;
+			_initialOtherLibraryTabs = args.otherLibraryTabs || [];
+			return;
+		}
+		if (args.readerTabState) {
+			_initialReaderTabState = args.readerTabState;
+			return;
+		}
+		if (args.noteTabState) {
+			_initialNoteTabState = args.noteTabState;
+			return;
+		}
+		if (args.movedTab) {
+			_initialMovedTab = args.movedTab;
+			return;
+		}
+		if (args.sessionState) {
+			_sessionPaneState = args.sessionState;
+			_windowSettings = normalizeWindowSettings(_sessionPaneState.settings);
+			restoreWindowGeometry(_sessionPaneState.geometry);
+			return;
+		}
+		if (Zotero.getZoteroPanes().some(pane => pane !== ZoteroPane)) {
+			return;
+		}
+		let states = Zotero.Session.getPendingPaneStates();
+		_sessionPaneState = states[0] || null;
+		_otherSessionPaneStates = states.slice(1);
+		if (_sessionPaneState?.settings) {
+			_windowSettings = normalizeWindowSettings(_sessionPaneState.settings);
+		}
+		// The window opens with the persisted geometry, which is shared by all windows and
+		// holds the position of whichever closed last, so when there are other windows to
+		// restore, use its own saved geometry instead
+		if (_sessionPaneState && _otherSessionPaneStates.length) {
+			restoreWindowGeometry(_sessionPaneState.geometry);
+		}
+	}
+	
+	
+	/**
+	 * @param {Object} [geometry] - The geometry property of a saved session state
+	 */
+	function restoreWindowGeometry(geometry) {
+		if (!geometry) {
+			return;
+		}
+		try {
+			let { screenX, screenY, width, height } = geometry;
+			if ([screenX, screenY, width, height].every(Number.isFinite)) {
+				({ screenX, screenY, width, height } = constrainToScreen(
+					screenX, screenY, width, height
+				));
+				window.resizeTo(width, height);
+				window.moveTo(screenX, screenY);
+			}
+			else if (Number.isFinite(width) && Number.isFinite(height)) {
+				window.resizeTo(width, height);
+			}
+			if (geometry.sizemode == 'maximized') {
+				window.maximize();
+			}
+			else if (geometry.sizemode == 'fullscreen') {
+				window.fullScreen = true;
+			}
+		}
+		catch (e) {
+			Zotero.logError(e);
+		}
+	}
+	
+	
+	/**
+	 * Fit a window rect onto the screen it overlaps most, so that a window saved on a screen
+	 * that's no longer connected doesn't open out of view
+	 *
+	 * Positions are in desktop pixels, offset from the screen's origin in CSS pixels, as in
+	 * window.screenX, and sizes are in CSS pixels.
+	 *
+	 * @return {Object} - screenX, screenY, width, height
+	 */
+	function constrainToScreen(screenX, screenY, width, height) {
+		// Allow windows snapped to a screen edge to keep their borders off-screen
+		const SCREEN_EDGE_SLOP = 8;
+		
+		let screen = Cc["@mozilla.org/gfx/screenmanager;1"]
+			.getService(Ci.nsIScreenManager)
+			.screenForRect(screenX, screenY, width, height);
+		if (!screen) {
+			return { screenX, screenY, width, height };
+		}
+		let left = {}, top = {}, availWidth = {}, availHeight = {};
+		screen.GetAvailRectDisplayPix(left, top, availWidth, availHeight);
+		let screenLeft = left.value;
+		let screenTop = top.value;
+		screen.GetAvailRect(left, top, availWidth, availHeight);
+		let screenRight = screenLeft + availWidth.value / screen.defaultCSSScaleFactor;
+		let screenBottom = screenTop + availHeight.value / screen.defaultCSSScaleFactor;
+		
+		width = Math.min(width, screenRight - screenLeft);
+		height = Math.min(height, screenBottom - screenTop);
+		if (screenX < screenLeft - SCREEN_EDGE_SLOP
+				|| screenX + width > screenRight + SCREEN_EDGE_SLOP) {
+			screenX = Math.max(screenLeft, Math.min(screenX, screenRight - width));
+		}
+		if (screenY < screenTop - SCREEN_EDGE_SLOP
+				|| screenY + height > screenBottom + SCREEN_EDGE_SLOP) {
+			screenY = Math.max(screenTop, Math.min(screenY, screenBottom - height));
+		}
+		return { screenX, screenY, width, height };
+	}
+	
+	
+	/**
+	 * Open the library tab a window without a saved session state starts with
+	 */
+	function openInitialLibraryTab() {
+		let state = _initialLibraryTabState;
+		// Focus an Advanced Search the window was opened with, as opening it within the
+		// window would, and the quick search otherwise
+		let focusElementID = state?.advancedSearch?.state == 'open'
+			? 'zotero-advanced-search-pane-deck'
+			: 'zotero-tb-search-textbox';
+		Zotero_Tabs.addLibraryTab({
+			id: 'zotero-pane',
+			state,
+			selectOptions: { focusElementID }
+		});
+		for (let data of _initialOtherLibraryTabs) {
+			Zotero_Tabs.addLibraryTab({ ...data, select: false });
+		}
+	}
+	
+	
+	/**
 	 * Called on window load or when pane has been reloaded after switching into or out of connector
 	 * mode
 	 */
 	async function _loadPane() {
-		if (!Zotero || !Zotero.initialized) return;
+		if (!Zotero || !Zotero.initialized) {
+			_loadedDeferred.resolve();
+			return;
+		}
+		
+		takeWindowState();
 		
 		// Set flags for hi-res displays
 		Zotero.hiDPI = window.devicePixelRatio > 1;
@@ -576,19 +805,19 @@ var ZoteroPane = new function () {
 		}
 			
 		Zotero_Tabs.init();
+		updateOtherWindowsTabs();
 		ZoteroContextPane.init();
-		// The items tree has to be initialized first, since the collections tree selects a
-		// row as soon as it's initialized, which loads items into the items tree
-		await ZoteroPane.initItemsTree();
-		await ZoteroPane.initCollectionsTree();
-		ZoteroPane.initCollectionTreeSearch();
 		
 		// Add a default progress window
 		ZoteroPane.progressWindow = new Zotero.ProgressWindow({ window });
 		
-		ZoteroPane.setItemsPaneMessage(Zotero.getString('pane.items.loading'));
-		
 		Zotero.Keys.windowInit(document);
+		
+		window.addEventListener('zotero-window-setting-change', (event) => {
+			if (event.detail.name == 'search.quicksearch-mode') {
+				Zotero.updateQuickSearchBox(document);
+			}
+		});
 		
 		if (Zotero.restoreFromServer) {
 			Zotero.restoreFromServer = false;
@@ -639,7 +868,7 @@ var ZoteroPane = new function () {
 		// -- this way the page won't be displayed when they sync their DB to
 		// another profile or if the DB is initialized erroneously (e.g. while
 		// switching data directory locations)
-		else if (Zotero.Prefs.get('firstRun2')) {
+		else if (Zotero.Prefs.get('firstRun2') && claimStartupTask('firstRun')) {
 			if (Zotero.Schema.dbInitialized || !Zotero.Sync.Server.enabled) {
 				setTimeout(function () {
 					ZoteroPane_Local.loadURI(ZOTERO_CONFIG.START_URL);
@@ -667,59 +896,108 @@ var ZoteroPane = new function () {
 			ZoteroPane.showFileRenamingBanner();
 			ZoteroPane.initSyncReminders(true);
 
-			if (Zotero.Prefs.get('reopenAccountPrefsOnRestart')) {
+			if (Zotero.Prefs.get('reopenAccountPrefsOnRestart')
+					&& claimStartupTask('reopenAccountPrefs')) {
 				Zotero.Prefs.clear('reopenAccountPrefsOnRestart');
 				Zotero.Utilities.Internal.openPreferences('zotero-prefpane-account');
 			}
 		});
 		
 		// TEMP: Clean up extra files from Mendeley imports <5.0.51
-		setTimeout(async function () {
-			var needsCleanup = await Zotero.DB.valueQueryAsync(
-				"SELECT COUNT(*) FROM settings WHERE setting='mImport' AND key='cleanup'"
-			)
-			if (!needsCleanup) return;
-			
-			var { Zotero_Import_Mendeley } = ChromeUtils.importESModule(
-				"chrome://zotero/content/import/mendeley/mendeleyImport.mjs"
-			);
-			var importer = new Zotero_Import_Mendeley();
-			importer.deleteNonPrimaryFiles();
-		}, 10000)
+		if (claimStartupTask('mendeleyCleanup')) {
+			setTimeout(async function () {
+				var needsCleanup = await Zotero.DB.valueQueryAsync(
+					"SELECT COUNT(*) FROM settings WHERE setting='mImport' AND key='cleanup'"
+				);
+				if (!needsCleanup) return;
+				
+				var { Zotero_Import_Mendeley } = ChromeUtils.importESModule(
+					"chrome://zotero/content/import/mendeley/mendeleyImport.mjs"
+				);
+				var importer = new Zotero_Import_Mendeley();
+				importer.deleteNonPrimaryFiles();
+			}, 10000);
+		}
 		
-		// Restore pane state
+		// Open the window's tabs
 		try {
-			let state = Zotero.Session.state.windows.find(x => x.type == 'pane');
-			if (state) {
-				Zotero_Tabs.restoreState(state.tabs);
+			if (_sessionPaneState) {
+				let state = _sessionPaneState;
+				Zotero_Tabs.restoreState(state.tabs)
+					.catch(e => Zotero.logError(e))
+					.finally(() => {
+						// A window saved without tabs starts with a fresh library tab
+						if (!Zotero_Tabs._tabs.length) {
+							openInitialLibraryTab();
+						}
+						// Library tabs load when they're first shown, and a loading library
+						// view marks the UI ready once its items load, so a window restored
+						// with another tab selected has to do it itself
+						else if (!Zotero_Tabs.isLibraryTab(Zotero_Tabs.selectedID)) {
+							Zotero.uiIsReady();
+						}
+						_sessionPaneStateRestored = true;
+						Zotero.Session.removePendingPaneState(state);
+						for (let sessionState of _otherSessionPaneStates) {
+							Zotero.openMainWindow({ sessionState });
+						}
+						_otherSessionPaneStates = [];
+					});
+			}
+			else if (_initialReaderTabState) {
+				let { itemID, primaryViewState, secondViewState, title } = _initialReaderTabState;
+				Zotero_Tabs.add({
+					type: 'reader-unloaded',
+					title: title || '',
+					data: { itemID, primaryViewState, secondViewState },
+					select: true
+				});
+			}
+			else if (_initialNoteTabState) {
+				let { itemID, title } = _initialNoteTabState;
+				Zotero_Tabs.add({
+					type: 'note-unloaded',
+					title: title || '',
+					data: { itemID },
+					select: true
+				});
+			}
+			else if (_initialMovedTab) {
+				let { windowID, tabID } = _initialMovedTab;
+				let sourceWindow = Zotero.getMainWindows()
+					.find(win => win.Zotero_Tabs?.windowID === windowID);
+				Promise.resolve(sourceWindow?.Zotero_Tabs.moveToWindow(tabID, window))
+					.catch((e) => {
+						Zotero.logError(e);
+					})
+					.then((newID) => {
+						// The tab was closed or its window went away before this window opened
+						if (!newID) {
+							openInitialLibraryTab();
+						}
+					});
+			}
+			else {
+				openInitialLibraryTab();
 			}
 		}
 		catch (e) {
 			Zotero.logError(e);
 		}
+		_loadedDeferred.resolve();
 		addFocusHandlers();
 	}
 	
 	
-	this.initContainers = function () {
-		this.initTagSelector();
-	};
-	
-	
-	this.uninitContainers = function () {
-		if (this.tagSelector) this.tagSelector.uninit();
-	};
-	
-	
 	var _lastPrimaryTypes;
-	this.updateNewItemTypes = function () {
+	this.updateNewItemTypes = function (popup) {
 		var primaryTypes = Zotero.ItemTypes.getPrimaryTypes();
 		var primaryTypesJoined = primaryTypes.join(',');
 		if (_lastPrimaryTypes == primaryTypesJoined) {
 			return;
 		}
 		
-		var addMenu = document.getElementById('zotero-tb-add').firstElementChild;
+		var addMenu = popup || this.libraryView.getElement('zotero-tb-add').firstElementChild;
 		
 		// Remove all nodes so we can regenerate
 		addMenu.replaceChildren();
@@ -773,6 +1051,18 @@ var ZoteroPane = new function () {
 	/*
 	 * Called when the window closes
 	 */
+	// Whether a window's last tab can be closed depends on what other windows are open
+	function updateOtherWindowsTabs() {
+		if (Zotero.isMac) {
+			return;
+		}
+		for (let win of Zotero.getMainWindows()) {
+			if (win != window) {
+				win.Zotero_Tabs?._update();
+			}
+		}
+	}
+	
 	function destroy()
 	{
 		if (!Zotero || !Zotero.initialized || !_loaded) {
@@ -781,29 +1071,52 @@ var ZoteroPane = new function () {
 		
 		this.serializePersist();
 
-		if (_collectionsTreeFocusListener) {
-			let [elem, listener] = _collectionsTreeFocusListener;
-			elem.removeEventListener("focus", listener);
-			_collectionsTreeFocusListener = null;
+		for (let view of this.libraryViews) {
+			view.uninit();
 		}
-		if(this.collectionsView) this.collectionsView.unregister();
-		if(this.itemsView) this.itemsView.unregister();
 		if (_syncRemindersObserverID) {
 			Zotero.Notifier.unregisterObserver(_syncRemindersObserverID);
 		}
 		if (_apiKeyObserverID) {
 			Zotero.Notifier.unregisterObserver(_apiKeyObserverID);
 		}
-		
-		this.uninitContainers();
+		for (let [progressQueue, name, listener] of _progressQueueListeners) {
+			progressQueue.removeListener(name, listener);
+		}
+		_progressQueueListeners = [];
 		
 		observerService.removeObserver(_reloadObserver, "zotero-reloaded");
+		observerService.removeObserver(_reloadObserver, "zotero-before-reload");
 		
 		ZoteroContextPane.destroy();
-		Zotero_Tabs.destroy();
+		updateOtherWindowsTabs();
+		Zotero.Plugins.notifyMainWindowUnload(window);
+		for (let symbol of _windowSettingObservers.values()) {
+			Zotero.Prefs.unregisterObserver(symbol);
+		}
+		_windowSettingObservers.clear();
 
-		if (!Zotero.getZoteroPanes().length) {
-			Zotero.Session.setLastClosedZoteroPaneState(this.getState());
+		// A window closed before it restored its saved state shouldn't come back in the next
+		// session, unless it's the last one
+		let unrestoredState = getUnrestoredSessionState();
+		if (unrestoredState) {
+			Zotero.Session.removePendingPaneState(unrestoredState);
+		}
+		let panes = Zotero.getZoteroPanes();
+		let state = this.getState();
+		if (!panes.length) {
+			Zotero.Session.setLastClosedZoteroPaneState(state || unrestoredState);
+		}
+		else {
+			// A window closed by closing its last tab was made reopenable then
+			if (state?.tabs.length) {
+				Zotero.Session.addClosedWindow(state);
+			}
+			// The layout is only switched by window size when there's a single window, so
+			// when one window remains, let it recalculate the layout
+			if (panes.length == 1) {
+				panes[0].updateLayoutConstraints();
+			}
 		}
 
 		Zotero_Tabs.closeAll();
@@ -839,13 +1152,6 @@ var ZoteroPane = new function () {
 
 		this.unserializePersist();
 		this.updateLayout();
-		this.initContainers();
-		
-		// Focus the quicksearch on pane open
-		var searchBar = document.getElementById('zotero-tb-search');
-		setTimeout(function () {
-			searchBar.searchTextbox.select();
-		}, 1);
 		
 		if (Zotero.proxyFailure) {
 			try {
@@ -858,7 +1164,8 @@ var ZoteroPane = new function () {
 		
 		// Auto-sync on pane open or if new account
 		let startupSync = false;
-		if (Zotero.Prefs.get('sync.autoSync') || Zotero.initAutoSync) {
+		if (claimStartupTask('autoSync')
+				&& (Zotero.Prefs.get('sync.autoSync') || Zotero.initAutoSync)) {
 			await Zotero.proxyAuthComplete;
 			await Zotero.uiReadyPromise;
 			
@@ -915,7 +1222,7 @@ var ZoteroPane = new function () {
 		// Close current tab
 		if (event.key == 'w') {
 			if (cmdOrCtrlOnly) {
-				if (Zotero_Tabs.selectedIndex > 0) {
+				if (Zotero_Tabs.canClose()) {
 					Zotero_Tabs.close();
 					event.preventDefault();
 					event.stopPropagation();
@@ -1039,7 +1346,7 @@ var ZoteroPane = new function () {
 	 * Escape and close the popup.
 	 */
 	function handleKeyDown(event, from) {
-		if (Zotero_Tabs.selectedIndex > 0) {
+		if (!Zotero_Tabs.selectedIsLibrary) {
 			// Escape from outside of the reader will focus reader's scrollable area
 			if (event.key === 'Escape') {
 				if (!document.activeElement.classList.contains('reader')) {
@@ -1094,7 +1401,7 @@ var ZoteroPane = new function () {
 			return;
 		}
 
-		if (from == 'zotero-pane') {
+		if (from && Zotero_Tabs.isLibraryTab(from)) {
 			// Highlight collections containing selected items
 			//
 			// We use Control (17) on Windows and Linux because Alt triggers the menubar;
@@ -1132,7 +1439,7 @@ var ZoteroPane = new function () {
 					this.highlightTimer.cancel();
 					this.highlightTimer = null;
 				}
-				ZoteroPane.collectionsView.setHighlightedRows();
+				ZoteroPane.collectionsView?.setHighlightedRows();
 			}
 		}
 	}
@@ -1140,11 +1447,12 @@ var ZoteroPane = new function () {
 	this.handleBlur = (event) => {
 		// If one tabs through the item/context pane all the way to the end and
 		// the focus leaves the pane, wrap it around to refocus the selected tab
-		let itemPane = document.getElementById("zotero-item-pane");
+		let itemPane = this.itemPane;
 		let contextPane = document.getElementById("zotero-context-pane");
 		let loosingFocus = event.target;
 		let receivingFocus = event.relatedTarget;
-		let itemPaneLostFocus = itemPane.contains(loosingFocus) && !itemPane.contains(receivingFocus);
+		let itemPaneLostFocus = !!itemPane
+			&& itemPane.contains(loosingFocus) && !itemPane.contains(receivingFocus);
 		let contextPaneLostFocus = contextPane.contains(loosingFocus) && !contextPane.contains(receivingFocus);
 		// Do not do anything if the window lost focus or if the last
 		// keypress was anything but a Tab. That way, it won't interfere with other navigation such as
@@ -1164,59 +1472,16 @@ var ZoteroPane = new function () {
 			this.lastFocusedElement = event.target;
 			// Special treatment to focus on quick-search dropmarker inside of the shadow DOM
 			if (this.lastFocusedElement.id == "zotero-tb-search-dropmarker") {
-				this.lastFocusedElement = document.getElementById("zotero-tb-search")._searchModePopup.parentElement;
+				this.lastFocusedElement = this.libraryView.getElement("zotero-tb-search")._searchModePopup.parentElement;
 			}
 		}
 		if (this.highlightTimer) {
 			this.highlightTimer.cancel();
 			this.highlightTimer = null;
 		}
-		ZoteroPane_Local.collectionsView.setHighlightedRows();
+		ZoteroPane_Local.collectionsView?.setHighlightedRows();
 	}
 
-	this.hideCollectionSearch = function () {
-		let collectionSearchField = document.getElementById("zotero-collections-search");
-		let collectionSearchButton = document.getElementById("zotero-tb-collections-search");
-		if (!collectionSearchField.value.length && collectionSearchField.classList.contains("visible")) {
-			collectionSearchField.classList.remove("visible");
-			collectionSearchField.setAttribute("disabled", true);
-			setTimeout(() => {
-				collectionSearchButton.style.display = '';
-				collectionSearchField.style.visibility = 'hidden';
-				collectionSearchField.style.removeProperty('max-width');
-			}, 50);
-		}
-	}
-
-	this.initCollectionTreeSearch = function () {
-		let collectionSearchField = document.getElementById("zotero-collections-search");
-		let collectionSearchButton = document.getElementById("zotero-tb-collections-search");
-		collectionSearchField.style.visibility = 'hidden';
-		collectionSearchField.addEventListener("blur", ZoteroPane.hideCollectionSearch);
-		collectionSearchButton.addEventListener("click", (_) => {
-			if (!collectionSearchField.classList.contains("visible")) {
-				collectionSearchButton.style.display = 'none';
-				// If the collectionPane is narrow, set smaller max-width
-				let maxWidth = collectionSearchField.getAttribute("data-expanded-width");
-				if (maxWidth) {
-					collectionSearchField.style.maxWidth = `${maxWidth}px`;
-				}
-				collectionSearchField.style.visibility = 'visible';
-				collectionSearchField.classList.add("visible", "expanding");
-				// Enable and focus the field only after it was revealed to prevent the cursor
-				// from changing between 'text' and 'pointer' back and forth as the input field expands
-				setTimeout(() => {
-					collectionSearchField.removeAttribute("disabled");
-					collectionSearchField.classList.remove("expanding");
-					collectionSearchField.focus();
-				}, 250);
-				return;
-			}
-			collectionSearchField.focus();
-		});
-	};
-
-	
 	function handleKeyUp(event) {
 		// When Option/Control is released, clear collection highlighting
 		if ((Zotero.isMac && event.key == "Alt")
@@ -1225,15 +1490,17 @@ var ZoteroPane = new function () {
 				this.highlightTimer.cancel();
 				this.highlightTimer = null;
 			}
-			ZoteroPane_Local.collectionsView.setHighlightedRows();
+			ZoteroPane_Local.collectionsView?.setHighlightedRows();
 			return;
 		}
 	}
 	
 	
 	this.handleClose = function (event) {
-		// Don't close the window from the first tab if other tabs are open
-		if (Zotero_Tabs.numTabs > 1) {
+		// Close the selected tab if it can be closed, which closes the window when it's the
+		// window's last tab
+		if (Zotero_Tabs.canClose()) {
+			Zotero_Tabs.close();
 			return;
 		}
 		window.close();
@@ -1245,6 +1512,7 @@ var ZoteroPane = new function () {
 	 * Option/Alt (Mac/Linux) press
 	 */
 	this._setHighlightedRowsCallback = async function () {
+		let libraryView = this.libraryView;
 		var objects = this.getSelectedObjects();
 		
 		// If no items or an unreasonable number, don't try
@@ -1274,8 +1542,8 @@ var ZoteroPane = new function () {
 		if (allInPublications) {
 			treeViewIDs.push("P" + Zotero.Libraries.userLibraryID);
 		}
-		if (treeViewIDs.length) {
-			await this.collectionsView.setHighlightedRows(treeViewIDs);
+		if (treeViewIDs.length && libraryView?.isConnected) {
+			await libraryView.collectionsView.setHighlightedRows(treeViewIDs);
 		}
 	};
 	
@@ -1292,7 +1560,7 @@ var ZoteroPane = new function () {
 			// Focus TinyMCE explicitly on tab key, since the normal focusing doesn't work right
 			if (!event.shiftKey && event.keyCode == event.DOM_VK_TAB) {
 				if (ZoteroPane.itemPane.mode == "note") {
-					document.getElementById('zotero-note-editor').focus();
+					ZoteroPane.libraryView.getElement('zotero-note-editor').focus();
 					event.preventDefault();
 					return;
 				}
@@ -1324,10 +1592,10 @@ var ZoteroPane = new function () {
 		try {
 			switch (command) {
 				case 'library':
-					document.getElementById(ZoteroPane.collectionsView.id).focus();
+					ZoteroPane.libraryView.getElement(ZoteroPane.collectionsView.id).focus();
 					break;
 				case 'quicksearch':
-					document.getElementById('zotero-tb-search-textbox').select();
+					ZoteroPane.libraryView.getElement('zotero-tb-search-textbox').select();
 					break;
 				case 'newItem':
 					(async function () {
@@ -1336,7 +1604,7 @@ var ZoteroPane = new function () {
 						var mru = Zotero.Prefs.get('newItemTypeMRU');
 						var type = mru ? mru.split(',')[0] : 'book';
 						await ZoteroPane.newItem(Zotero.ItemTypes.getID(type));
-						let itemBox = document.getElementById('zotero-editpane-info-box');
+						let itemBox = ZoteroPane.libraryView.getElement('zotero-editpane-info-box');
 						// Ensure itemBox is opened
 						itemBox.open = true;
 						var menu = itemBox.itemTypeMenu;
@@ -1429,6 +1697,9 @@ var ZoteroPane = new function () {
 	 * _data_ is an optional object with field:value for itemData
 	 */
 	this.newItem = async function (typeID, data, row, manual) {
+		// The item goes in the view the action started in, even if another tab is selected by the
+		// time the item can be saved
+		let libraryView = this.libraryView;
 		// Shouldn't be reachable with multiple libraries selected (toolbar is disabled),
 		// but just in case
 		let rows = this.getCollectionTreeRows();
@@ -1449,7 +1720,7 @@ var ZoteroPane = new function () {
 		await this.itemPane.handleBlur();
 		
 		if (row !== undefined && row !== null) {
-			var collectionTreeRow = this.collectionsView.getRow(row);
+			var collectionTreeRow = libraryView.collectionsView.getRow(row);
 			var libraryID = collectionTreeRow.ref.libraryID;
 		}
 		else {
@@ -1473,25 +1744,29 @@ var ZoteroPane = new function () {
 			}
 		});
 		
-		// Expand the item pane if it's closed
-		if (this.itemPane.hasAttribute("collapsed")) {
-			this.itemPane.removeAttribute("collapsed");
+		if (libraryView?.isConnected) {
+			// Expand the item pane if it's closed
+			if (libraryView.itemPane.hasAttribute("collapsed")) {
+				libraryView.itemPane.removeAttribute("collapsed");
+			}
+			
+			//set to Info tab
+			libraryView.getElement('zotero-view-item').selectedIndex = 0;
 		}
 		
-		//set to Info tab
-		document.getElementById('zotero-view-item').selectedIndex = 0;
-		
 		// Ensure item is visible
-		await this.selectItem(itemID);
+		await this.selectItems([itemID], { libraryView });
 
 		if (manual) {
 			// Update most-recently-used list for New Item menu
 			this.addItemTypeToNewItemTypeMRU(Zotero.ItemTypes.getName(typeID));
-			let itemBox = ZoteroPane.itemPane.querySelector("info-box");
-			// Make sure the item box is opened
-			itemBox.open = true;
-			// Focus the title field
-			itemBox.getTitleField().focus();
+			if (libraryView?.isConnected) {
+				let itemBox = libraryView.itemPane.querySelector("info-box");
+				// Make sure the item box is opened
+				itemBox.open = true;
+				// Focus the title field
+				itemBox.getTitleField().focus();
+			}
 		}
 		
 		return Zotero.Items.getAsync(itemID);
@@ -1518,13 +1793,13 @@ var ZoteroPane = new function () {
 	}
 	
 	
-	this.newCollection = async function (parentKey = null) {
-		if (!this.canEditLibrary()) {
+	this.newCollection = async function (parentKey = null, libraryID = null) {
+		if (libraryID === null ? !this.canEditLibrary() : !Zotero.Libraries.get(libraryID).editable) {
 			this.displayCannotEditLibraryMessage();
 			return null;
 		}
 		
-		var libraryID = this.getSelectedLibraryIDs()[0];
+		libraryID ??= this.getSelectedLibraryIDs()[0];
 		
 		// Get a unique "Untitled" name for this level in the collection hierarchy
 		var collections;
@@ -1607,558 +1882,6 @@ var ZoteroPane = new function () {
 		return this.collectionsView.toggleVirtualCollection(libraryID, type, show, select);
 	};
 
-	this.initItemsTree = async function () {
-		try {
-			const CollectionViewItemTree = require('zotero/collectionViewItemTree');
-			var itemsTree = document.getElementById('zotero-items-tree');
-			ZoteroPane.itemsView = await CollectionViewItemTree.init(itemsTree, {
-				id: "main",
-				dragAndDrop: true,
-				columnPicker: true,
-				onSelectionChange: selection => ZoteroPane.itemSelected(selection),
-				onContextMenu: (...args) => ZoteroPane.onItemsContextMenuOpen(...args),
-				onActivate: (event, items) => ZoteroPane.onItemTreeActivate(event, items),
-				emptyMessage: Zotero.getString('pane.items.loading')
-			});
-			ZoteroPane.itemsView.onRefresh.addListener(() => ZoteroPane.setTagScope());
-			// Update the item pane on every refresh, so the "items in this view" count stays in
-			// sync when the result set changes without a selection change (e.g., quick search,
-			// tag filter, or sort with nothing selected)
-			ZoteroPane.itemsView.onRefresh.addListener(async () => {
-				await ZoteroPane.itemSelected();
-			});
-			// Also update the count when rows are added or removed by notifier events with
-			// nothing selected (e.g., items downloaded during a sync). Debounced so that the
-			// item pane doesn't re-render within the notifier dispatch or once per event in
-			// a burst of changes.
-			let updateUnselectedCount = Zotero.Utilities.debounce(() => {
-				if (!ZoteroPane.itemsView.selection.count) {
-					ZoteroPane.itemPane.render();
-				}
-			}, 100);
-			ZoteroPane.itemsView.onRowCountChange.addListener(() => {
-				if (!ZoteroPane.itemsView.selection.count) {
-					updateUnselectedCount();
-				}
-			});
-			ZoteroPane.itemsView.waitForLoad().then(() => Zotero.uiIsReady());
-
-			ItemTreeMenuBar.setItemTreeSortKeys(ZoteroPane.itemsView);
-		}
-		catch (e) {
-			Zotero.logError(e);
-			Zotero.debug(e, 1);
-		}
-	}
-
-	this.initCollectionsTree = async function () {
-		try {
-			const CollectionTree = require('zotero/collectionTree');
-			var collectionsTree = document.getElementById('zotero-collections-tree');
-			ZoteroPane.collectionsView = await CollectionTree.init(collectionsTree, {
-				onSelectionChange: prevSelection => ZoteroPane.onCollectionSelected(prevSelection),
-				onContextMenu: (...args) => ZoteroPane.onCollectionsContextMenuOpen(...args),
-				dragAndDrop: true,
-				multiSelect: true
-			});
-			let treeElem = collectionsTree.firstChild;
-			let focusListener = ZoteroPane.collectionsView.recordCollectionTreeFocus;
-			treeElem.addEventListener("focus", focusListener);
-			_collectionsTreeFocusListener = [treeElem, focusListener];
-		}
-		catch (e) {
-			Zotero.logError(e);
-			Zotero.debug(e, 1);
-		}
-	};
-
-	this.initTagSelector = async function () {
-		try {
-			var container = document.getElementById('zotero-tag-selector-container');
-			if (!container.hasAttribute('collapsed')) {
-				this.tagSelector = await Zotero.TagSelector.init(
-					document.getElementById('zotero-tag-selector'),
-					{
-						container: 'zotero-tag-selector-container',
-						onSelection: this.updateTagFilter.bind(this),
-					}
-				);
-				// Occasionally, when the app is first opened, the scrollable tag list doesn't
-				// occupy the full height of the tag selector. This ensures that it occupies all
-				// available space.
-				setTimeout(() => {
-					this.tagSelector.handleResize();
-				}, 100);
-			}
-		}
-		catch (e) {
-			Zotero.logError(e);
-			Zotero.debug(e, 1);
-		}
-	};
-	
-	
-	this.handleTagSelectorResize = Zotero.Utilities.debounce(async function () {
-		if (this.tagSelectorShown()) {
-			// Initialize if dragging open after startup
-			if (!this.tagSelector) {
-				await this.setTagScope();
-			}
-			this.tagSelector.handleResize();
-		}
-	}, 100);
-	
-	
-	/*
-	 * Sets the tag filter on the items view
-	 */
-	this.updateTagFilter = async function () {
-		if (this.itemsView) {
-			await this.itemsView.setFilter('tags', ZoteroPane_Local.tagSelector.getTagSelection());
-		}
-	};
-	
-	
-	// Keep in sync with ZoteroStandalone.updateViewOption()
-	this.toggleTagSelector = async function () {
-		var container = document.getElementById('zotero-tag-selector-container');
-		var showing = container.hasAttribute('collapsed');
-		container.toggleAttribute('collapsed', !showing);
-		
-		// If showing, set scope to items in current view
-		// and focus filter textbox
-		if (showing) {
-			await this.setTagScope();
-			ZoteroPane.tagSelector.focusTextbox();
-		}
-		// If hiding, clear selection
-		else {
-			ZoteroPane.tagSelector.uninit();
-			ZoteroPane.tagSelector = null;
-		}
-	};
-	
-	
-	this.tagSelectorShown = function () {
-		var collectionTreeRows = this.getCollectionTreeRows();
-		if (!collectionTreeRows.length) return;
-		var tagSelector = document.getElementById('zotero-tag-selector-container');
-		// A debounced resize can arrive after window shutdown removes the DOM.
-		return !!tagSelector && !tagSelector.hasAttribute('collapsed');
-	};
-
-
-	this.updateTagSelectorViewSettingsMenu = async function () {
-		document.getElementById('show-automatic').toggleAttribute('checked', ZoteroPane.tagSelector.showAutomatic);
-		document.getElementById('display-all-tags').toggleAttribute('checked', ZoteroPane.tagSelector.displayAllTags);
-		document.getElementById('num-selected').label = ZoteroPane.tagSelector.label;
-		var libraryID = ZoteroPane.tagSelector.libraryID;
-		var library = Zotero.Libraries.get(libraryID);
-		// 'Delete Automatic Tags in This Library' is per-library, so disable it when the
-		// selection spans multiple libraries
-		var enabled = !ZoteroPane.tagSelector.multiLibrary
-			&& library.editable
-			&& (await Zotero.Tags.getAutomaticInLibrary(libraryID)).length > 0;
-		document.getElementById('delete-automatic-tags').disabled = !enabled;
-	};
-	
-	
-	/*
-	 * Set the tags scope to the items in the current view
-	 *
-	 * Passed to the items tree to trigger on changes
-	 */
-	this.setTagScope = async function () {
-		var collectionTreeRows = this.getCollectionTreeRows();
-		if (self.tagSelectorShown()) {
-			if (!ZoteroPane.tagSelector) {
-				await this.initTagSelector();
-			}
-			if (collectionTreeRows.every(o => o.editable)) {
-				ZoteroPane_Local.tagSelector.setMode('edit');
-			}
-			else {
-				ZoteroPane_Local.tagSelector.setMode('view');
-			}
-			ZoteroPane_Local.tagSelector.onItemViewChanged({
-				libraryID: collectionTreeRows[0].ref && collectionTreeRows[0].ref.libraryID,
-				collectionTreeRows
-			});
-		}
-	};
-	
-	this.onCollectionSelected = Zotero.serial(async function () {
-		var collectionTreeRows = this.getCollectionTreeRows();
-		if (!collectionTreeRows.length) {
-			Zotero.debug('ZoteroPane.onCollectionSelected: No selected collection found');
-			return;
-		}
-
-		// Only certain combinations of rows can be shown together in one items view.
-		// Collections, saved searches, and library roots can be mixed freely, within or
-		// across libraries, except that a library root can't be combined with a collection
-		// or saved search -- a library already shows all of its items, so pairing it with
-		// one of its own child collections/searches has no use case. Recently Read can be
-		// combined only with other Recently Read rows (across libraries). All other special
-		// views (Trash, Duplicates, etc.) can't be shown alongside anything else. The
-		// visibility-group check enforces both the Recently Read restriction and the
-		// feed/non-feed split: Recently Read and feeds are each their own group, so pairing
-		// one with a collection (or with each other) spans two groups, which can't share an
-		// items view. When the selected rows can't be shown together, drop everything except
-		// the focused row and show just that. Selections spanning multiple libraries are
-		// shown grouped by library in the items list.
-		if (collectionTreeRows.length > 1) {
-			let combinable = collectionTreeRows.every(
-				row => row.isCollection() || row.isSearch() || row.isLibrary(true)
-					|| row.isFeeds() || row.isRecentlyRead()
-			);
-			let mixesVisibilityGroups = new Set(
-				collectionTreeRows.map(row => row.visibilityGroup)
-			).size > 1;
-			// A library root already shows all of its items, so don't combine it with a
-			// collection or saved search (which share its visibility group)
-			let mixesLibraryAndCollection = collectionTreeRows.some(row => row.isLibrary(true))
-				&& collectionTreeRows.some(row => row.isCollection() || row.isSearch());
-			if (!combinable || mixesVisibilityGroups || mixesLibraryAndCollection) {
-				Zotero.debug("ZoteroPane.onCollectionSelected: Selected rows can't be shown "
-					+ "together -- keeping only the focused row");
-				// Drop all but the focused row. Don't await selectByID() here: it awaits
-				// waitForSelect(), whose 'select' event can't fire until this handler
-				// returns, so it would deadlock. Reducing the selection directly
-				// re-triggers onCollectionSelected() with the single row.
-				this.collectionsView.selection.select(this.collectionsView.selection.focused);
-				return;
-			}
-		}
-
-		if (this.itemsView?.collectionTreeRows
-				&& Zotero.Utilities.arrayEquals(
-					collectionTreeRows.map(r => r.id).sort(),
-					this.itemsView.collectionTreeRows.map(r => r.id).sort()
-				)) {
-			Zotero.debug("ZoteroPane.onCollectionSelected: Collection selection hasn't changed");
-
-			// Update enabled actions, in case editability has changed
-			this._updateEnabledActionsForCollectionTreeRows(collectionTreeRows);
-			return;
-		}
-		
-		let advancedSearchDeck = document.getElementById('zotero-advanced-search-pane-deck');
-		if (this.itemsView.collectionTreeRows[0]?.isSearch()
-				&& advancedSearchDeck.state === 'open'
-				&& advancedSearchDeck.selectedSearchType === 'saved'
-				&& !(await this._confirmCloseSavedSearchEditor())) {
-			// Revert the selection to just the search being edited, suppressing the
-			// selection event so that this handler doesn't re-run and re-prompt
-			this.collectionsView.selection.selectEventsSuppressed = true;
-			try {
-				let index = this.collectionsView.getRowIndexByID(this.itemsView.collectionTreeRows[0].id);
-				if (index !== false) {
-					this.collectionsView.selection.select(index);
-				}
-			}
-			finally {
-				this.collectionsView.selection.selectEventsSuppressed = false;
-			}
-			return;
-		}
-		
-		// Rename tab
-		let tabName = collectionTreeRows.length == 1
-			? collectionTreeRows[0].getName()
-			: Zotero.getString('tab-title-multiple-collections');
-		Zotero_Tabs.rename('zotero-pane', tabName);
-		
-		// Clear quick search and tag selector when switching views
-		document.getElementById('zotero-tb-search').onCollectionSelected();
-		if (ZoteroPane.tagSelector) {
-			ZoteroPane.tagSelector.clearTagSelection();
-		}
-		
-		this._refreshAdvancedSearchPane(collectionTreeRows);
-		this._updateEnabledActionsForCollectionTreeRows(collectionTreeRows);
-		
-		for (let collectionTreeRow of collectionTreeRows) {
-			collectionTreeRow.setSearch('');
-			if (ZoteroPane.tagSelector) {
-				collectionTreeRow.setTags(ZoteroPane.tagSelector.getTagSelection());
-			}
-
-			// If item data not yet loaded for library, load it now.
-			// Other data types are loaded at startup
-			if (collectionTreeRow.isFeeds()) {
-				var feedsToLoad = Zotero.Feeds.getAll().filter(feed => !feed.getDataLoaded('item'));
-				if (feedsToLoad.length) {
-					Zotero.debug("Waiting for items to load for feeds " + feedsToLoad.map(feed => feed.libraryID));
-					ZoteroPane_Local.setItemsPaneMessage(Zotero.getString('pane.items.loading'));
-					for (let feed of feedsToLoad) {
-						await feed.waitForDataLoad('item');
-					}
-				}
-			}
-			else {
-				var library = Zotero.Libraries.get(collectionTreeRow.ref.libraryID);
-				if (!library.getDataLoaded('item')) {
-					Zotero.debug("Waiting for items to load for library " + library.libraryID);
-					ZoteroPane_Local.setItemsPaneMessage(Zotero.getString('pane.items.loading'));
-					await library.waitForDataLoad('item');
-				}
-			}
-		}
-		
-		await this.itemsView.changeCollectionTreeRows(collectionTreeRows);
-		
-		Zotero.Prefs.set('lastViewedFolder', collectionTreeRows[0].id);
-		// The focused row is the one just clicked, whereas collectionTreeRows is in tree order
-		let focusedRow = this.collectionsView.selectedTreeRow;
-		if (focusedRow && focusedRow.isCollection()) {
-			Zotero.Collections.addToRecent(focusedRow.ref);
-		}
-	});
-
-
-	/**
-	 * @param {Zotero.CollectionTreeRow[]} [collectionTreeRows] - During collection selection,
-	 *     the newly selected rows, which aren't in the items view yet
-	 */
-	this._refreshAdvancedSearchPane = function (collectionTreeRows) {
-		let deck = document.getElementById('zotero-advanced-search-pane-deck');
-
-		deck.pane.refresh();
-
-		let search = deck.state === 'closed' || deck.selectedSearchType !== 'temporary' || !deck.pane.active
-			? null
-			: deck.pane.search;
-		if (collectionTreeRows) {
-			for (let collectionTreeRow of collectionTreeRows) {
-				collectionTreeRow.setAdvancedSearch(search);
-			}
-			return undefined;
-		}
-		// Apply via the items view, whose rows can be different objects from the
-		// collection tree's current rows
-		return this.itemsView.setFilter('advanced-search', search);
-	};
-
-
-	/**
-	 * Prompt to save changes in the open saved-search editor and close it
-	 *
-	 * If the editor has no changes to save, or if the search being edited was deleted or
-	 * trashed, leaving nothing to save the changes to, the editor is closed without a prompt.
-	 *
-	 * @return {Promise<Boolean>} - False if the user chose Cancel, leaving the editor open
-	 */
-	this._confirmCloseSavedSearchEditor = async function () {
-		let deck = document.getElementById('zotero-advanced-search-pane-deck');
-		let editedSearch = Zotero.Searches.get(deck.pane.editedSearchID);
-		if (!editedSearch || editedSearch.deleted || !deck.pane.hasChanges) {
-			await deck.pane.cancel();
-			return true;
-		}
-		let result = Zotero.Prompt.confirm({
-			window,
-			title: Zotero.getString('saved-search-close-confirmation-title'),
-			text: Zotero.getString('saved-search-close-confirmation-body'),
-			button0: Zotero.Prompt.BUTTON_TITLE_SAVE,
-			button1: Zotero.Prompt.BUTTON_TITLE_CANCEL,
-			button2: Zotero.Prompt.BUTTON_TITLE_DONT_SAVE
-		});
-		switch (result) {
-			case 0:
-				await deck.pane.save();
-				return true;
-			case 1:
-				return false;
-			default:
-				await deck.pane.cancel();
-				return true;
-		}
-	};
-	
-	
-	/**
-	 * @param {'open' | 'collapsed' | 'closed'} state
-	 * @param {Boolean} [skipRefresh=false] - Don't refresh the items view
-	 */
-	this.setAdvancedSearchState = async function (state, { skipRefresh = false } = {}) {
-		let deck = document.getElementById('zotero-advanced-search-pane-deck');
-		// Replacing or closing the saved-search editor discards its working copy, so
-		// prompt to save changes first, as when switching collections
-		if (deck.state === 'open' && deck.selectedSearchType === 'saved') {
-			if (!(await this._confirmCloseSavedSearchEditor())) {
-				return;
-			}
-			// The editor is now closed, which is all a close or collapse needs; only
-			// opening the temporary pane continues
-			if (state !== 'open') {
-				return;
-			}
-		}
-		let oldState = deck.state;
-		deck.selectedSearchType = 'temporary';
-		deck.state = state;
-		
-		let advancedSearchPane = deck.pane;
-
-		document.getElementById('zotero-tb-search').updateMode();
-		let refreshPromise;
-		if (!skipRefresh && !(state === 'open' && oldState === 'collapsed'
-				|| state === 'collapsed' && oldState === 'open')) {
-			// State change changes displayed items - refresh the tree
-			refreshPromise = this._refreshAdvancedSearchPane();
-		}
-		
-		// Update the pane state synchronously, so that a state change initiated
-		// while the refresh below is pending doesn't see a stale search
-		if (state === 'closed') {
-			advancedSearchPane.search = null;
-		}
-		else if (state === 'open') {
-			Zotero_Tabs.select('zotero-pane');
-			advancedSearchPane.focus();
-		}
-		
-		await refreshPromise;
-	};
-	
-	
-	/**
-	 * @param {'open' | 'collapsed' | 'closed'} state
-	 */
-	this.toggleAdvancedSearchState = async function (state) {
-		let deck = document.getElementById('zotero-advanced-search-pane-deck');
-		if (state === deck.state && deck.selectedSearchType !== 'saved') {
-			// If we're trying to open the pane, and it's already open but not focused,
-			// focus it
-			if (state === 'open' && !deck.pane.matches(':focus-within')) {
-				deck.pane.focus();
-				return;
-			}
-			
-			// Flip the state
-			switch (state) {
-				case 'open':
-					state = 'closed';
-					break;
-				case 'collapsed':
-				case 'closed':
-					state = 'open';
-					break;
-			}
-		}
-		await this.setAdvancedSearchState(state);
-	};
-
-
-	/**
-	 * Open the Advanced Search pane seeded from the quick search text, reproducing
-	 * the current quick search mode as editable conditions.
-	 *
-	 * The quick search field is cleared, since its text now lives in the Advanced
-	 * Search. Closing the Advanced Search resets to an unfiltered view rather than
-	 * restoring the quick search.
-	 *
-	 * @param {String} searchText
-	 * @param {String} [mode='fields'] - The quick search mode to reproduce
-	 */
-	this.openAdvancedSearchFromQuickSearch = async function (searchText, mode = 'fields') {
-		// Conditions written in the query ("tag:foo") become conditions in the
-		// search; what's left is split into words (keeping quoted phrases
-		// intact), as the quick search does
-		let { tree, text } = Zotero.SearchQuery.parse(searchText);
-		let parts = Zotero.SearchConditions.parseSearchString(text);
-		if (!parts.length && !tree) {
-			await this.toggleAdvancedSearchState('open');
-			return;
-		}
-
-		let deck = document.getElementById('zotero-advanced-search-pane-deck');
-		let search = new Zotero.Search();
-		let libraryID = this.getSelectedLibraryIDs()[0];
-		if (libraryID) {
-			search.libraryID = libraryID;
-		}
-
-		// Reproduce the quick search mode as editable conditions, one per word joined
-		// with "all": Title/Creator/Year and All Fields & Tags each map to a single
-		// condition, Everything to an "any" group of Any Field plus full-text.
-		// Title/Creator/Year matches only top-level items, so set the result level to item.
-		if (tree) {
-			// The words are joined to the conditions with "all", so an "any"
-			// query becomes a group rather than something they're OR'd into
-			Zotero.SearchQuery.addToSearch(search, parts.length && tree.joinMode === 'any'
-				? { joinMode: 'all', children: [tree] }
-				: tree);
-		}
-		if (mode === 'titleCreatorYear') {
-			search.addCondition('resultLevel', 'item');
-		}
-		for (let part of parts) {
-			if (mode === 'everything') {
-				search.addCondition('groupStart', 'true', '');
-				search.addCondition('joinMode', 'any');
-				search.addCondition('anyField', 'contains', part.text);
-				search.addCondition('fulltextContent', 'contains', part.text);
-				search.addCondition('groupEnd', 'true', '');
-			}
-			else if (mode === 'titleCreatorYear') {
-				search.addCondition('titleCreatorYear', 'contains', part.text);
-			}
-			else {
-				search.addCondition('anyField', 'contains', part.text);
-			}
-		}
-
-		// Show the Advanced Search and seed it, without yet touching the items list,
-		// so that the quick search results stay visible until they're replaced below
-		deck.selectedSearchType = 'temporary';
-		deck.state = 'open';
-		deck.pane.search = search;
-		deck.pane.refresh();
-
-		// Clear the quick search text and every selected row's filter (without their own
-		// refresh), so the field doesn't flash empty and closing Advanced Search returns
-		// to an unfiltered view. The submit() below replaces the results in place.
-		let searchBox = document.getElementById('zotero-tb-search');
-		searchBox.updateMode();
-		searchBox.value = '';
-		for (let collectionTreeRow of this.itemsView.collectionTreeRows) {
-			collectionTreeRow.setSearch('');
-		}
-
-		Zotero_Tabs.select('zotero-pane');
-		await deck.pane.submit();
-		// Focus the first condition so the user can refine the seeded search
-		deck.pane.focus();
-	};
-
-
-	/**
-	 * @param {'open' | 'closed'} state
-	 */
-	this.setSavedSearchEditorState = async function (state) {
-		let collectionTreeRow = this.getCollectionTreeRows()[0];
-		if (state === 'open' && !collectionTreeRow.isSearch()) {
-			throw new Error('Cannot show saved search editor outside search row');
-		}
-		
-		let deck = document.getElementById('zotero-advanced-search-pane-deck');
-		deck.selectedSearchType = 'saved';
-		deck.state = state;
-		
-		if (state === 'open') {
-			deck.pane.search = collectionTreeRow.ref;
-		}
-
-		document.getElementById('zotero-tb-search').updateMode();
-		let refreshPromise = this._refreshAdvancedSearchPane();
-		if (state === 'open') {
-			deck.pane.focus();
-		}
-		await refreshPromise;
-	};
-
 
 	this.openAdvancedSearchWindow = function () {
 		Zotero.debug(`ZoteroPane.openAdvancedSearchWindow() is deprecated -- use ZoteroPane.toggleAdvancedSearchState() instead`);
@@ -2200,8 +1923,13 @@ var ZoteroPane = new function () {
 
 		for (let i = 0; i < disableIfNoEdit.length; i++) {
 			let command = disableIfNoEdit[i];
-			let el = document.getElementById(command);
+			let el = this.libraryView?.getElement(command) || document.getElementById(command);
 			if (!el) continue;
+			
+			if (!collectionTreeRows.length) {
+				el.setAttribute("disabled", "true");
+				continue;
+			}
 			
 			// If a trash is selected, new collection depends on the
 			// editability of the library
@@ -2239,70 +1967,119 @@ var ZoteroPane = new function () {
 	
 	
 	/**
-	 * return {CollectionTreeRow[]}
+	 * The tab data for a library tab showing the selected collection tree rows
+	 *
+	 * @return {Object|null} - { title, icon, state }, or null if no rows are selected
 	 */
-	this.getCollectionTreeRows = function () {
-		if (!this.collectionsView) {
-			return [];
+	this._getSelectedCollectionsTabData = function () {
+		let collectionTreeRows = this.getCollectionTreeRows();
+		if (!collectionTreeRows.length) {
+			// With no library view loaded, use a library tab's saved collection selection
+			return Zotero_Tabs.getUnloadedLibraryTabData();
 		}
-		// selection.selected is in click order -- return rows in collections-list order
-		return [...this.collectionsView.selection.selected]
-			.sort((a, b) => a - b)
-			.map(index => this.collectionsView.getRow(index));
-	}
-	
-	
+		let focusedIndex = this.collectionsView.selection.focused;
+		let focusedRow = this.collectionsView.getRow(focusedIndex);
+		return {
+			title: collectionTreeRows.length == 1
+				? collectionTreeRows[0].getName()
+				: Zotero.getString('tab-title-multiple-collections'),
+			icon: focusedRow ? this.collectionsView.getIconName(focusedIndex) : null,
+			state: {
+				collections: collectionTreeRows.map(row => row.id),
+				focusedCollection: focusedRow ? focusedRow.id : null
+			}
+		};
+	};
+
+
 	/**
-	 * @return {Promise<Boolean>} - Promise that resolves to true if an item was selected,
-	 *                              or false if not (used for tests, though there could possibly
-	 *                              be a better test for whether the item pane changed)
+	 * The tab data for a new library tab or window, based on the
+	 * extensions.zotero.newLibraryTabTarget pref, which is either 'last' for this window's
+	 * collection selection or a collection tree row id (e.g., 'L1' or 'C123')
+	 *
+	 * @return {Object} - { title, icon, state }
 	 */
-	this.itemSelected = function () {
-		return async function () {
-			if (!this.itemsView || !this.itemsView.selection) {
-				Zotero.debug("Items view not available in itemSelected", 2);
-				return false;
-			}
-			let collectionTreeRows = this.getCollectionTreeRows();
-			// I don't think this happens in normal usage, but it can happen during tests
-			if (!collectionTreeRows.length) {
-				return false;
-			}
-			
-			var selectedItems = this.itemsView.getSelectedObjects();
-			
-			// Display buttons at top of item pane depending on context. This needs to run even if the
-			// selection hasn't changed, because the selected items might have been modified.
-			this.itemPane.data = selectedItems;
-			this.itemPane.collectionTreeRows = collectionTreeRows;
-			this.itemPane.itemsView = this.itemsView;
-			this.itemPane.editable = this.collectionsView.editable;
-			this.itemPane.updateItemPaneButtons(selectedItems);
-			
-			// Tab selection observer in standalone.js makes sure that
-			// updateQuickCopyCommands is called
-			if (Zotero_Tabs.selectedType == 'library') {
-				this.updateQuickCopyCommands(selectedItems);
-			}
-			
-			// Check if selection has actually changed. The onselect event that calls this
-			// can be called in various situations where the selection didn't actually change,
-			// such as whenever selectEventsSuppressed is set to false.
-			var ids = selectedItems.map(item => item.treeViewID);
-			ids.sort();
-			if (ids.length && Zotero.Utilities.arrayEquals(_lastSelectedItems, ids)) {
-				return false;
-			}
-			_lastSelectedItems = ids;
-			
-			return this.itemPane.render();
-		}.bind(this)()
-		.catch((e) => {
-			Zotero.logError(e);
-			Zotero.crash();
-			throw e;
-		});
-	}
+	this.getNewLibraryTabData = function () {
+		let data = Zotero.Utilities.Internal.getNewLibraryTabTargetData()
+			|| this._getSelectedCollectionsTabData();
+		if (data) {
+			return data;
+		}
+		// No selected rows to open, so fall back to My Library
+		let library = Zotero.Libraries.get(Zotero.Libraries.userLibraryID);
+		return {
+			title: library.name,
+			icon: 'library',
+			state: { collections: ['L' + library.libraryID] }
+		};
+	};
+
+
+	/**
+	 * Open a new library tab showing the configured new-tab target
+	 */
+	this.newLibraryTab = function () {
+		Zotero_Tabs.addLibraryTab(this.getNewLibraryTabData());
+	};
+
+
+	/**
+	 * Open a new main window showing the configured new-tab target
+	 */
+	this.newWindow = function () {
+		return Zotero.openMainWindow({ libraryTabState: this.getNewLibraryTabData().state });
+	};
+
+
+	/**
+	 * Open the selected collection tree rows in a new library tab
+	 *
+	 * @param {CollectionTreeRow[]} [collectionTreeRows] - Rows to open instead of the selected rows
+	 */
+	this.openCollectionsInNewTab = function (collectionTreeRows) {
+		// The first tab is selected, which makes it the active view, so read the rows first
+		let tabs = this._getSelectedCollectionsTabsData(collectionTreeRows);
+		for (let [i, data] of tabs.entries()) {
+			Zotero_Tabs.addLibraryTab({ ...data, select: i == 0 });
+		}
+	};
+
+
+	/**
+	 * Open the selected collection tree rows in a new main window, each in a library tab of its
+	 * own
+	 *
+	 * @param {CollectionTreeRow[]} [collectionTreeRows] - Rows to open instead of the selected rows
+	 */
+	this.openCollectionsInNewWindow = function (collectionTreeRows) {
+		let [first, ...others] = this._getSelectedCollectionsTabsData(collectionTreeRows);
+		if (!first) {
+			return null;
+		}
+		return Zotero.openMainWindow({ libraryTabState: first.state, otherLibraryTabs: others });
+	};
+
+
+	/**
+	 * The tab data for library tabs showing each of the selected collection tree rows
+	 *
+	 * @param {CollectionTreeRow[]} [collectionTreeRows] - Rows to use instead of the selected rows
+	 * @return {Object[]} - { title, icon, state } for each row
+	 */
+	this._getSelectedCollectionsTabsData = function (collectionTreeRows) {
+		collectionTreeRows ??= this.getCollectionTreeRows();
+		if (!collectionTreeRows.length) {
+			let data = this._getSelectedCollectionsTabData();
+			return data ? [data] : [];
+		}
+		let collectionsView = this.collectionsView;
+		return collectionTreeRows.map(row => ({
+			title: row.getName(),
+			icon: collectionsView.getIconName(collectionsView.getRowIndexByID(row.id)),
+			state: { collections: [row.id], focusedCollection: row.id }
+		}));
+	};
+	
 	
 	this.updateAddAttachmentMenu = function (event, popup) {
 		if (event.target !== popup) {
@@ -2340,7 +2117,7 @@ var ZoteroPane = new function () {
 					items,
 					tabType: "library",
 					tabSubType: undefined,
-					tabID: "zotero-pane",
+					tabID: ZoteroPane.libraryView.tabID,
 				})
 			}
 		);
@@ -2367,7 +2144,7 @@ var ZoteroPane = new function () {
 					items,
 					tabType: "library",
 					tabSubType: undefined,
-					tabID: "zotero-pane",
+					tabID: ZoteroPane.libraryView.tabID,
 				})
 			}
 		);
@@ -2407,6 +2184,7 @@ var ZoteroPane = new function () {
 	 * @return {Promise}
 	 */
 	this.reindexItem = async function () {
+		let libraryView = this.libraryView;
 		var items = this.getSelectedItems();
 		if (!items) {
 			return;
@@ -2419,7 +2197,9 @@ var ZoteroPane = new function () {
 		}
 		
 		await Zotero.FullText.indexItems(itemIDs, { complete: true });
-		await document.getElementById('zotero-attachment-box').updateItemIndexedState();
+		if (libraryView?.isConnected) {
+			await libraryView.getElement('zotero-attachment-box').updateItemIndexedState();
+		}
 	};
 	
 	
@@ -2434,6 +2214,10 @@ var ZoteroPane = new function () {
 		}
 		
 		var item = self.getSelectedItems()[0];
+		// The duplicate goes in the view the action started in, even if another tab is selected
+		// by the time it can be saved
+		let libraryView = self.libraryView;
+		let collectionTreeRows = self.getCollectionTreeRows();
 		if (item.isNote()
 			&& !((await Zotero.Notes.ensureEmbeddedImagesAreAvailable(item)))
 			&& !Zotero.Notes.promptToIgnoreMissingImage()) {
@@ -2447,7 +2231,7 @@ var ZoteroPane = new function () {
 			// If in collections, add new item to all selected collections
 			// that the original item belongs to
 			if (newItem.isTopLevelItem()) {
-				let collectionIDs = self.getCollectionTreeRows()
+				let collectionIDs = collectionTreeRows
 					.filter(r => r.isCollection() && item.inCollection(r.ref.id))
 					.map(r => r.ref.id);
 				if (collectionIDs.length) {
@@ -2474,7 +2258,7 @@ var ZoteroPane = new function () {
 			}
 		});
 		
-		await self.selectItem(newItem.id);
+		await self.selectItems([newItem.id], { libraryView });
 		
 		return newItem;
 	};
@@ -2489,6 +2273,7 @@ var ZoteroPane = new function () {
 		let authorCreatorType = Zotero.CreatorTypes.getID('author');
 		let bookAuthorCreatorType = Zotero.CreatorTypes.getID('bookAuthor');
 		
+		let libraryView = this.libraryView;
 		let original = this.getSelectedItems()[0];
 		let duplicate = await this.duplicateSelectedItem();
 		if (!duplicate) return null;
@@ -2541,7 +2326,9 @@ var ZoteroPane = new function () {
 		await original.saveTx({ skipDateModifiedUpdate: true });
 		await duplicate.saveTx();
 		
-		ZoteroPane.itemPane.querySelector("info-box").getTitleField().focus();
+		if (libraryView?.isConnected) {
+			libraryView.itemPane.querySelector("info-box").getTitleField().focus();
+		}
 		return duplicate;
 	};
 	
@@ -2763,8 +2550,8 @@ var ZoteroPane = new function () {
 	};
 	
 	
-	this.deleteSelectedCollection = async function (deleteItems) {
-		var collectionTreeRows = this.getCollectionTreeRows();
+	this.deleteSelectedCollection = async function (deleteItems, collectionTreeRows) {
+		collectionTreeRows ??= this.getCollectionTreeRows();
 		if (!collectionTreeRows.length) {
 			return;
 		}
@@ -2800,7 +2587,7 @@ var ZoteroPane = new function () {
 			return;
 		}
 		
-		if (!this.canEdit() && !collectionTreeRows[0].isFeedsOrFeed()) {
+		if (!collectionTreeRows[0].editable && !collectionTreeRows[0].isFeedsOrFeed()) {
 			this.displayCannotEditLibraryMessage();
 			return;
 		}
@@ -2856,12 +2643,11 @@ var ZoteroPane = new function () {
 			"", "", "", {}
 		);
 		if (index == 0) {
-			return this.collectionsView.deleteSelection(deleteItems);
+			return this.collectionsView.deleteSelection(deleteItems, collectionTreeRows);
 		}
 	}
 
-	this.clearAllLastRead = async function () {
-		let collectionTreeRows = this.getCollectionTreeRows();
+	this.clearAllLastRead = async function (collectionTreeRows = this.getCollectionTreeRows()) {
 		if (collectionTreeRows.length != 1 || !collectionTreeRows[0].isRecentlyRead()) {
 			return;
 		}
@@ -2897,6 +2683,8 @@ var ZoteroPane = new function () {
 	 * @return {Promise}
 	 */
 	this.restoreSelectedItems = async function () {
+		// The rows to restore from, which the transaction reads once it runs
+		let itemsView = this.itemsView;
 		let selectedObjects = this.getSelectedObjects();
 		if (!selectedObjects.length) {
 			return;
@@ -2917,14 +2705,14 @@ var ZoteroPane = new function () {
 			}
 			Zotero.UndoHistory.stageAction(undoAction, { count: selectedObjects.length });
 
-			for (let row = 0; row < this.itemsView.rowCount; row++) {
+			for (let row = 0; row < itemsView.rowCount; row++) {
 				// Only look at top-level items
-				if (this.itemsView.getLevel(row) !== 0
-						|| !this.itemsView.getRow(row).isObjectRow) {
+				if (itemsView.getLevel(row) !== 0
+						|| !itemsView.getRow(row).isObjectRow) {
 					continue;
 				}
 
-				let parent = this.itemsView.getRow(row).ref;
+				let parent = itemsView.getRow(row).ref;
 				let childIDs = [];
 				let subcollections = [];
 				if (parent instanceof Zotero.Collection) {
@@ -2973,9 +2761,7 @@ var ZoteroPane = new function () {
 	/**
 	 * @return {Promise}
 	 */
-	this.emptyTrash = async function () {
-		var libraryID = this.getSelectedLibraryIDs()[0];
-		
+	this.emptyTrash = async function (libraryID = this.getSelectedLibraryIDs()[0]) {
 		var result = Services.prompt.confirm(
 			null,
 			"",
@@ -3009,14 +2795,13 @@ var ZoteroPane = new function () {
 	
 	
 	// Currently only works on searches
-	this.duplicateSelectedCollection = async function () {
-		if (!this.canEdit()) {
-			this.displayCannotEditLibraryMessage();
+	this.duplicateSelectedCollection = async function (rows = this.getCollectionTreeRows()) {
+		var row = rows[0];
+		if (!row) {
 			return;
 		}
-
-		var row = this.getCollectionTreeRows()[0];
-		if (!row) {
+		if (!row.editable) {
+			this.displayCannotEditLibraryMessage();
 			return;
 		}
 		
@@ -3026,27 +2811,26 @@ var ZoteroPane = new function () {
 	};
 	
 	
-	this.editSelectedCollection = async function () {
-		if (!this.canEdit()) {
+	this.editSelectedCollection = async function (rows = this.getCollectionTreeRows()) {
+		var row = rows[0];
+		if (!row) {
+			return;
+		}
+		if (!row.editable) {
 			this.displayCannotEditLibraryMessage();
 			return;
 		}
-
-		var row = this.getCollectionTreeRows()[0];
-		if (row) {
-			if (row.isCollection()) {
-				this.collectionsView.startEditing(row);
-			}
-			else {
-				this.setSavedSearchEditorState('open');
-			}
+		if (row.isCollection()) {
+			this.collectionsView.startEditing(row);
+		}
+		else {
+			this.setSavedSearchEditorState('open');
 		}
 	};
 
-	// Move selected collection to specified target collection or library.
-	// Target has to be in the same library as the currently selected collection.
-	this.moveCollection = async (target) => {
-		let selected = this.getSelectedCollections()[0];
+	// Move a collection (by default, the selected one) to specified target collection or library.
+	// Target has to be in the same library as the collection.
+	this.moveCollection = async (target, selected = this.getSelectedCollections()[0]) => {
 		if (!selected) return;
 
 		if (target.libraryID !== selected.libraryID) {
@@ -3062,20 +2846,20 @@ var ZoteroPane = new function () {
 		await selected.saveTx({ undoAction: 'undo-action-move-collection' });
 	};
 
-	// Copy selected collection into another collection or library.
+	// Copy a collection (by default, the selected one) into another collection or library.
 	// Partially, a replication of drag-drop mechanism from CollectionTree.onDrop.
-	this.copyCollection = async (target) => {
-		let selected = this.getSelectedCollections()[0];
+	this.copyCollection = async (target, selected = this.getSelectedCollections()[0]) => {
+		let collectionsView = this.collectionsView;
 		if (!selected) return;
 
 		let targetTreeRowID = `L${target.libraryID}`;
 		if (target instanceof Zotero.Collection) {
 			targetTreeRowID = `C${target.id}`;
 			// Make sure the row is actually visible
-			await ZoteroPane.collectionsView.expandToCollection(target.id);
+			await collectionsView.expandToCollection(target.id);
 		}
-		let targetTreeRowIndex = ZoteroPane.collectionsView.getRowIndexByID(targetTreeRowID);
-		let targetTreeRow = ZoteroPane.collectionsView.getRow(targetTreeRowIndex);
+		let targetTreeRowIndex = collectionsView.getRowIndexByID(targetTreeRowID);
+		let targetTreeRow = collectionsView.getRow(targetTreeRowIndex);
 		let copyOptions = {
 			tags: Zotero.Prefs.get('groups.copyTags'),
 			childNotes: Zotero.Prefs.get('groups.copyChildNotes'),
@@ -3083,7 +2867,7 @@ var ZoteroPane = new function () {
 			childFileAttachments: Zotero.Prefs.get('groups.copyChildFileAttachments'),
 			annotations: Zotero.Prefs.get('groups.copyAnnotations'),
 		};
-		ZoteroPane.collectionsView.executeCollectionCopy({
+		collectionsView.executeCollectionCopy({
 			collection: selected,
 			targetCollectionID: target instanceof Zotero.Collection ? target.id : null,
 			targetLibraryID: target.libraryID,
@@ -3096,8 +2880,7 @@ var ZoteroPane = new function () {
 		await Zotero.FeedItems.toggleReadByID(this.getSelectedItems(true));
 	};
 
-	this.markFeedRead = async function () {
-		var rows = this.getCollectionTreeRows();
+	this.markFeedRead = async function (rows = this.getCollectionTreeRows()) {
 		if (!rows.length) return;
 
 		let feeds = rows.some(row => row.isFeeds()) ? Zotero.Feeds.getAll() : rows.map(row => row.ref);
@@ -3108,8 +2891,7 @@ var ZoteroPane = new function () {
 	};
 
 	
-	this.editSelectedFeed = async function () {
-		var rows = this.getCollectionTreeRows();
+	this.editSelectedFeed = async function (rows = this.getCollectionTreeRows()) {
 		if (!rows.length) return;
 		var row = rows[0];
 		
@@ -3131,11 +2913,10 @@ var ZoteroPane = new function () {
 		feed.cleanupReadAfter = data.cleanupReadAfter;
 		feed.cleanupUnreadAfter = data.cleanupUnreadAfter;
 		await feed.saveTx();
-		Zotero_Tabs.rename("zotero-pane", feed.name);
 	};
 	
-	this.refreshFeed = function () {
-		var row = this.getCollectionTreeRows()[0];
+	this.refreshFeed = function (rows = this.getCollectionTreeRows()) {
+		var row = rows[0];
 		if (!row) return;
 		
 		let feed = row.ref;
@@ -3203,96 +2984,6 @@ var ZoteroPane = new function () {
 			}
 		}
 	}
-	
-	
-	this.clearQuicksearch = async function (skipSearchRun) {
-		var search = document.getElementById('zotero-tb-search');
-		if (search.searchTextbox.value !== '') {
-			search.searchTextbox.value = '';
-			if (!skipSearchRun) {
-				await this.search();
-			}
-			return true;
-		}
-		return false;
-	};
-	
-	
-	/**
-	 * Some keys trigger an immediate search
-	 */
-	this.handleSearchKeypress = function (textbox, event) {
-		if (event.keyCode == event.DOM_VK_ESCAPE) {
-			if (textbox.searchTextbox.value) {
-				textbox.searchTextbox.value = '';
-				this.search();
-			}
-			else {
-				this.itemsView?.focus();
-			}
-		}
-		else if (event.keyCode == event.DOM_VK_RETURN) {
-			this.search(true);
-		}
-	}
-
-
-	this.handleCollectionSearchInput = function () {
-		let collectionsSearchField = document.getElementById("zotero-collections-search");
-		this.collectionsView.setFilter(collectionsSearchField.value);
-		// Make sure that the filter ends up being hidden if the value is cleared
-		// after the blur event fires. This happens on windows on cross icon click.
-		if (collectionsSearchField.value.length == 0
-				&& document.activeElement !== collectionsSearchField) {
-			this.hideCollectionSearch();
-		}
-	}
-	
-	
-	/**
-	 * @return {Promise}
-	 */
-	this.search = async function (runAdvanced) {
-		if (!this.itemsView) {
-			return;
-		}
-		var search = document.getElementById('zotero-tb-search');
-		var searchVal = search.searchTextbox.value;
-		if (!runAdvanced && Zotero.SearchQuery.hasOpenQuote(searchVal)) {
-			return;
-		}
-		var spinner = document.getElementById('zotero-tb-search-spinner');
-		spinner.setAttribute("status", "animate");
-		spinner.style.visibility = 'visible';
-		// A query with conditions in it ("by:smith crispr") filters by those
-		// and matches whatever text is left over the way the current mode
-		// does; anything else is text to search for, as typed
-		// Each selected row scopes the query to its own library, so the query
-		// carries none of its own -- with one, a multi-library selection would
-		// match only in that library
-		let query = Zotero.SearchQuery.getSearch(searchVal, {
-			mode: Zotero.Prefs.get('search.quicksearch-mode')
-		});
-		if (query) {
-			this._quickSearchIsQuery = true;
-			await this.itemsView.setFilter('search', '');
-			await this.itemsView.setFilter('advanced-search', query);
-		}
-		else {
-			// Only clear a search this set, so an open Advanced Search keeps
-			// its own
-			if (this._quickSearchIsQuery) {
-				this._quickSearchIsQuery = false;
-				await this.itemsView.setFilter('advanced-search', null);
-			}
-			// A condition whose value hasn't been typed yet is left out of the
-			// text, so completing a condition name doesn't search for it
-			await this.itemsView.setFilter('search',
-				Zotero.SearchQuery.parse(searchVal).text);
-		}
-		spinner.style.removeProperty("visibility");
-		spinner.removeAttribute("status");
-	};
 	
 	
 	this.sync = function () {
@@ -3363,6 +3054,10 @@ var ZoteroPane = new function () {
 						return;
 					}
 					setTimeout(() => {
+						// Remind in one window only
+						if (Zotero.getActiveZoteroPane() !== this) {
+							return;
+						}
 						this.showSetUpSyncReminder();
 						this.showAutoSyncReminder();
 					}, 5000);
@@ -3493,10 +3188,16 @@ var ZoteroPane = new function () {
 	 * lastDisplayed time.
 	 */
 	this.hideSyncReminder = function () {
-		let panel = document.getElementById('sync-reminder-container');
-		let reminderType = panel.getAttribute('data-reminder-type');
-		panel.setAttribute('collapsed', true);
-		panel.removeAttribute('data-reminder-type');
+		let reminderType = document.getElementById('sync-reminder-container')
+			.getAttribute('data-reminder-type');
+		for (let win of Zotero.getMainWindows()) {
+			let panel = win.document.getElementById('sync-reminder-container');
+			if (!panel) {
+				continue;
+			}
+			panel.setAttribute('collapsed', true);
+			panel.removeAttribute('data-reminder-type');
+		}
 
 		if (['setUp', 'autoSync'].includes(reminderType)) {
 			Zotero.Prefs.set(`sync.reminder.${reminderType}.lastDisplayed`, Math.round(Date.now() / 1000));
@@ -3517,7 +3218,7 @@ var ZoteroPane = new function () {
 			Zotero.warn("ZoteroPane.selectItems() now takes an 'options' object -- update your code");
 			options = { inLibraryRoot: options };
 		}
-		let { inLibraryRoot, noTabSwitch, noWindowRestore } = options;
+		let { inLibraryRoot, noTabSwitch, noWindowRestore, libraryView } = options;
 		if (!itemIDs.length) {
 			return false;
 		}
@@ -3532,25 +3233,24 @@ var ZoteroPane = new function () {
 			window.restore();
 		}
 		
-		if (!this.collectionsView) {
-			throw new Error("Collections view not loaded");
+		// Show the items in the given view, or else in a tab that's already showing their library,
+		// if there is one
+		var view = libraryView?.isConnected
+			? libraryView
+			: await this.openLibraryViewForLibrary(items[0].libraryID);
+		if (!view) {
+			return false;
 		}
-		
-		var found = await this.collectionsView.selectItems(itemIDs, inLibraryRoot);
-		
-		// Focus the items pane
-		if (found) {
-			document.getElementById(ZoteroPane.itemsView.id).focus();
-		}
+		await view.selectItems(itemIDs, { inLibraryRoot });
 		
 		if (!noTabSwitch) {
-			Zotero_Tabs.select('zotero-pane', false, { focusElementID: ZoteroPane.itemsView.id });
+			Zotero_Tabs.select(view.tabID, false, { focusElementID: view.itemsView.id });
 		}
 		return true;
 	};
 	
 	this.selectAll = function () {
-		if (this.itemsView.domEl.contains(document.activeElement)) {
+		if (this.itemsView && this.itemsView.domEl.contains(document.activeElement)) {
 			this.itemsView.selection.selectAll();
 		}
 		else {
@@ -3628,8 +3328,8 @@ var ZoteroPane = new function () {
 	 *
 	 * If asIDs is true, return an array of itemIDs instead
 	 *
-	 * If libraryTabOnly is true, return the library tab's item tree selection even if
-	 * another tab is currently selected
+	 * If libraryTabOnly is true, return the active library view's item tree selection even
+	 * if another tab is currently selected
 	 */
 	this.getSelectedItems = function (asIDs, { libraryTabOnly = false } = {}) {
 		if (libraryTabOnly) {
@@ -3731,8 +3431,14 @@ var ZoteroPane = new function () {
 	/**
 	 * Show context menu once it's ready
 	 */
-	this.onCollectionsContextMenuOpen = async function (event, x, y) {
-		await ZoteroPane.buildCollectionContextMenu();
+	this.onCollectionsContextMenuOpen = async function (event, x, y, index) {
+		// A right-click on an unselected row applies to that row without selecting it
+		let rows;
+		if (index !== undefined && !this.collectionsView.selection.isSelected(index)) {
+			rows = [this.collectionsView.getRow(index)];
+			this.collectionsView.tree.setTargetRow(index);
+		}
+		await ZoteroPane.buildCollectionContextMenu(rows);
 		x = x || event.screenX;
 		y = y || event.screenY;
 		// TEMP: Quick fix for https://forums.zotero.org/discussion/105103/
@@ -3763,12 +3469,33 @@ var ZoteroPane = new function () {
 	};
 	
 	
+	this.onCollectionsContextMenuHidden = function (event) {
+		if (event.target.id == 'zotero-collectionmenu') {
+			this.collectionsView.tree.setTargetRow(null);
+		}
+	};
+	
+	
 	this.onCollectionContextMenuSelect = function (event) {
 		event.stopPropagation();
 		var o = _collectionContextMenuOptions.find(o => o.id == event.target.id)
 		if (o?.oncommand) {
-			o.oncommand();
+			o.oncommand(_collectionContextMenuRows);
 		}
+	};
+	
+	
+	// Rows the collection context menu was last built for
+	var _collectionContextMenuRows = [];
+	
+	// Select the context menu rows if they aren't selected, for commands that act on the items
+	// in the items list
+	var selectCollectionContextMenuRows = async (rows) => {
+		if (this.getCollectionTreeRows().includes(rows[0])) {
+			return;
+		}
+		await this.collectionsView.selectByID(rows[0].id);
+		await this.itemsView.waitForLoad();
 	};
 	
 	
@@ -3779,11 +3506,22 @@ var ZoteroPane = new function () {
 	// standalone.xul as well, so for now they have to remain as XML entities.
 	var _collectionContextMenuOptions = [
 		{
+			id: "openInNewTab",
+			oncommand: rows => this.openCollectionsInNewTab(rows)
+		},
+		{
+			id: "openInNewWindow",
+			oncommand: rows => this.openCollectionsInNewWindow(rows)
+		},
+		{
+			id: "sep0",
+		},
+		{
 			id: "sync",
 			label: Zotero.getString('sync.sync'),
-			oncommand: () => {
+			oncommand: (rows) => {
 				Zotero.Sync.Runner.sync({
-					libraries: [this.getSelectedLibraryIDs()[0]],
+					libraries: [rows[0].ref.libraryID],
 				});
 			}
 		},
@@ -3792,54 +3530,60 @@ var ZoteroPane = new function () {
 		},
 		{
 			id: "newCollection",
-			command: "cmd_zotero_newCollection"
+			oncommand: rows => this.newCollection(null, rows[0].ref.libraryID)
 		},
 		{
 			id: "newSubcollection",
-			oncommand: () => {
-				this.newCollection(this.getSelectedCollections()[0].key);
+			oncommand: (rows) => {
+				this.newCollection(rows[0].ref.key, rows[0].ref.libraryID);
 			}
 		},
 		{
 			id: "refreshFeed",
-			oncommand: () => this.refreshFeed()
+			oncommand: rows => this.refreshFeed(rows)
 		},
 		{
 			id: "sep2",
 		},
 		{
 			id: "showDuplicates",
-			oncommand: () => {
-				this.setVirtual(this.getSelectedLibraryIDs()[0], 'duplicates', true, true);
+			oncommand: (rows) => {
+				this.setVirtual(rows[0].ref.libraryID, 'duplicates', true, true);
 			}
 		},
 		{
 			id: "showUnfiled",
-			oncommand: () => {
-				this.setVirtual(this.getSelectedLibraryIDs()[0], 'unfiled', true, true);
+			oncommand: (rows) => {
+				this.setVirtual(rows[0].ref.libraryID, 'unfiled', true, true);
 			}
 		},
 		{
 			id: "showRecentlyRead",
-			oncommand: () => {
-				this.setVirtual(this.getSelectedLibraryIDs()[0], 'recentlyRead', true, true);
+			oncommand: (rows) => {
+				this.setVirtual(rows[0].ref.libraryID, 'recentlyRead', true, true);
 			}
 		},
 		{
 			id: "showRetracted",
-			oncommand: () => {
-				this.setVirtual(this.getSelectedLibraryIDs()[0], 'retracted', true, true);
+			oncommand: (rows) => {
+				this.setVirtual(rows[0].ref.libraryID, 'retracted', true, true);
 			}
 		},
 		{
 			id: "showPublications",
-			oncommand: () => {
-				this.setVirtual(this.getSelectedLibraryIDs()[0], 'publications', true, true);
+			oncommand: (rows) => {
+				this.setVirtual(rows[0].ref.libraryID, 'publications', true, true);
 			}
 		},
 		{
 			id: "editSelectedCollection",
-			oncommand: () => this.editSelectedCollection()
+			oncommand: async (rows) => {
+				// The saved search editor edits the selected search
+				if (rows[0].isSearch()) {
+					await selectCollectionContextMenuRows(rows);
+				}
+				this.editSelectedCollection(rows);
+			}
 		},
 		{
 			id: "moveCollection",
@@ -3849,59 +3593,68 @@ var ZoteroPane = new function () {
 		},
 		{
 			id: "duplicate",
-			oncommand: () => this.duplicateSelectedCollection()
+			oncommand: rows => this.duplicateSelectedCollection(rows)
 		},
 		{
 			id: "markReadFeed",
-			oncommand: () => this.markFeedRead()
+			oncommand: rows => this.markFeedRead(rows)
 		},
 		{
 			id: "editSelectedFeed",
-			oncommand: () => this.editSelectedFeed()
+			oncommand: rows => this.editSelectedFeed(rows)
 		},
 		{
 			id: 'addFeed'
 		},
 		{
 			id: "deleteCollection",
-			oncommand: () => this.deleteSelectedCollection()
+			oncommand: rows => this.deleteSelectedCollection(false, rows)
 		},
 		{
 			id: "clearAllLastRead",
-			oncommand: () => this.clearAllLastRead()
+			oncommand: rows => this.clearAllLastRead(rows)
 		},
 		{
 			id: "deleteCollectionAndItems",
-			oncommand: () => this.deleteSelectedCollection(true)
+			oncommand: rows => this.deleteSelectedCollection(true, rows)
 		},
 		{
 			id: "sep3",
 		},
 		{
 			id: "exportCollection",
-			oncommand: () => Zotero_File_Interface.exportCollection()
+			oncommand: async (rows) => {
+				await selectCollectionContextMenuRows(rows);
+				Zotero_File_Interface.exportCollection();
+			}
 		},
 		{
 			id: "createBibCollection",
-			oncommand: () => Zotero_File_Interface.bibliographyFromCollection()
+			oncommand: async (rows) => {
+				await selectCollectionContextMenuRows(rows);
+				Zotero_File_Interface.bibliographyFromCollection();
+			}
 		},
 		{
 			id: "exportFile",
-			oncommand: () => Zotero_File_Interface.exportFile()
+			oncommand: rows => Zotero_File_Interface.exportFile(rows[0].ref.libraryID)
 		},
 		{
 			id: "loadReport",
-			oncommand: () => Zotero_Report_Interface.loadCollectionReport()
+			oncommand: async (rows) => {
+				await selectCollectionContextMenuRows(rows);
+				Zotero_Report_Interface.loadCollectionReport();
+			}
 		},
 		{
 			id: "emptyTrash",
-			oncommand: () => this.emptyTrash()
+			oncommand: rows => this.emptyTrash(rows[0].ref.libraryID)
 		},
 		{
 			id: "removeLibrary",
 			label: Zotero.getString('pane.collections.menu.remove.library'),
-			oncommand: () => {
-				let library = Zotero.Libraries.get(this.getSelectedLibraryIDs()[0]);
+			oncommand: (rows) => {
+				let library = Zotero.Libraries.get(rows[0].ref.libraryID);
 				let ps = Services.prompt;
 				let buttonFlags = (ps.BUTTON_POS_0) * (ps.BUTTON_TITLE_IS_STRING)
 					+ (ps.BUTTON_POS_1) * (ps.BUTTON_TITLE_CANCEL);
@@ -3921,15 +3674,21 @@ var ZoteroPane = new function () {
 		},
 	];
 	
-	this.buildCollectionContextMenu = async function () {
-		var libraryID = this.getSelectedLibraryIDs()[0];
+	/**
+	 * @param {CollectionTreeRow[]} [collectionTreeRows] - Rows the menu applies to, if not the
+	 *     selected rows
+	 */
+	this.buildCollectionContextMenu = async function (collectionTreeRows) {
 		var options = _collectionContextMenuOptions;
 		
-		var collectionTreeRows = this.getCollectionTreeRows();
+		var isSelection = !collectionTreeRows;
+		collectionTreeRows ??= this.getCollectionTreeRows();
 		// This can happen if selection is changing during delayed second call below
 		if (!collectionTreeRows.length) {
 			return;
 		}
+		_collectionContextMenuRows = collectionTreeRows;
+		var libraryID = collectionTreeRows[0].ref.libraryID;
 		let libraryIDs = new Set(collectionTreeRows.map(o => o.ref.libraryID));
 		let multipleLibraries = libraryIDs.size > 1;
 		
@@ -3937,7 +3696,7 @@ var ZoteroPane = new function () {
 		// and the new collection's items are still loading, so continue menu after loading is
 		// done. This causes some menu items (e.g., export/createBib/loadReport) to appear gray
 		// in the menu at first and then turn black once there are items
-		if (!collectionTreeRows[0].isHeader() && !this.itemsView.initialized) {
+		if (isSelection && !collectionTreeRows[0].isHeader() && !this.itemsView.initialized) {
 			await this.itemsView.waitForLoad();
 		}
 		
@@ -3981,7 +3740,19 @@ var ZoteroPane = new function () {
 				'loadReport'
 			];
 			
-			if (!this.itemsView.rowCount) {
+			// The items list shows the selected rows' items, so check an unselected collection
+			// directly
+			let hasItems;
+			if (isSelection) {
+				hasItems = !!this.itemsView.rowCount;
+			}
+			else {
+				let collection = collectionTreeRows[0].ref;
+				hasItems = !!(Zotero.Prefs.get('recursiveCollections')
+					? collection.getDescendents(false, 'item', false)
+					: collection.getChildItems(true)).length;
+			}
+			if (!hasItems) {
 				disable = ['createBibCollection', 'loadReport'];
 				
 				// If no items in any of the collections' subcollections either, disable export
@@ -4067,7 +3838,8 @@ var ZoteroPane = new function () {
 				show.push('editSelectedCollection', 'duplicate');
 			}
 			
-			if (!this.itemsView.rowCount) {
+			// An unselected search's items aren't known without running it
+			if (isSelection && !this.itemsView.rowCount) {
 				disable.push('exportCollection', 'createBibCollection', 'loadReport');
 			}
 			
@@ -4164,6 +3936,13 @@ var ZoteroPane = new function () {
 			}
 		}
 
+		// Any row that shows an items list can be opened in its own tab or window
+		if (!collectionTreeRows[0].isHeader()) {
+			show.push('openInNewTab', 'openInNewWindow', 'sep0');
+			document.l10n.setAttributes(m.openInNewTab, 'collections-menu-open-in-new-tab',
+				{ count: collectionTreeRows.length });
+		}
+
 		if (useHideOrDelete === 'delete') {
 			m.deleteCollection.classList.add('zotero-menuitem-delete-collection');
 			m.deleteCollection.classList.remove('zotero-menuitem-hide-collection');
@@ -4182,6 +3961,7 @@ var ZoteroPane = new function () {
 				&& !collectionTreeRows[0].isUnfiled()
 				&& !collectionTreeRows[0].isRetracted()) {
 			disable.push(
+				'newCollection',
 				'newSubcollection',
 				'editSelectedCollection',
 				'duplicate',
@@ -4192,7 +3972,8 @@ var ZoteroPane = new function () {
 		
 		// If within non-editable group or trash it empty, disable Empty Trash
 		if (collectionTreeRows[0].isTrash()) {
-			if ((collectionTreeRows[0].isWithinGroup() && !collectionTreeRows[0].isWithinEditableGroup()) || !this.itemsView.rowCount) {
+			if ((collectionTreeRows[0].isWithinGroup() && !collectionTreeRows[0].isWithinEditableGroup())
+					|| (isSelection && !this.itemsView.rowCount)) {
 				disable.push('emptyTrash');
 			}
 		}
@@ -4227,7 +4008,7 @@ var ZoteroPane = new function () {
 					collectionTreeRows,
 					tabType: "library",
 					tabSubType: undefined,
-					tabID: "zotero-pane",
+					tabID: ZoteroPane.libraryView.tabID,
 				})
 			}
 		);
@@ -4802,7 +4583,7 @@ var ZoteroPane = new function () {
 					items,
 					tabType: "library",
 					tabSubType: undefined,
-					tabID: "zotero-pane",
+					tabID: ZoteroPane.libraryView.tabID,
 				})
 			}
 		);
@@ -4816,17 +4597,17 @@ var ZoteroPane = new function () {
 		let popup = event.target;
 		popup.replaceChildren();
 
-		let selected = this.getSelectedCollections();
+		let selected = _collectionContextMenuRows.map(row => row.ref);
 
 		// Add current library at the top to be able to move collections into it
-		let library = Zotero.Libraries.get(ZoteroPane.getSelectedLibraryIDs()[0]);
+		let library = Zotero.Libraries.get(selected[0].libraryID);
 		let libraryMenuItem = document.createXULElement("menuitem");
 		libraryMenuItem.setAttribute("label", library.name);
 		libraryMenuItem.setAttribute("image", library.treeViewImage);
 		libraryMenuItem.setAttribute("value", library.treeViewID);
 		libraryMenuItem.addEventListener("command", (event) => {
 			if (event.target.tagName == 'menuitem') {
-				this.moveCollection(library);
+				this.moveCollection(library, selected[0]);
 				event.stopPropagation();
 			}
 		});
@@ -4837,7 +4618,7 @@ var ZoteroPane = new function () {
 		popup.appendChild(document.createXULElement("menuseparator"));
 		
 		// Build menus for each top-level collection of this library
-		let collections = Zotero.Collections.getByLibrary(this.getSelectedLibraryIDs()[0]);
+		let collections = Zotero.Collections.getByLibrary(library.libraryID);
 		for (let col of collections) {
 			let menuItem = Zotero.Utilities.Internal.createMenuForTarget(
 				col,
@@ -4845,7 +4626,7 @@ var ZoteroPane = new function () {
 				null,
 				(event, collection) => {
 					if (event.target.tagName == 'menuitem') {
-						this.moveCollection(collection);
+						this.moveCollection(collection, selected[0]);
 						event.stopPropagation();
 					}
 				},
@@ -4868,7 +4649,7 @@ var ZoteroPane = new function () {
 		if (event.target !== event.currentTarget) return;
 		let popup = document.getElementById("zotero-copy-collection-popup");
 		popup.replaceChildren();
-		let selected = this.getSelectedCollections()[0];
+		let selected = _collectionContextMenuRows[0].ref;
 
 		// Fetch all libraries
 		let topLevelEntries = Zotero.Libraries.getAll().filter(lib => !(lib instanceof Zotero.Feed));
@@ -4911,7 +4692,7 @@ var ZoteroPane = new function () {
 			myLibraryMenuItem.classList.add('menuitem-iconic');
 			myLibraryMenuItem.addEventListener("command", (event) => {
 				if (event.target.tagName == 'menuitem') {
-					this.copyCollection(myLibrary);
+					this.copyCollection(myLibrary, selected);
 					event.stopPropagation();
 				}
 			});
@@ -4930,7 +4711,7 @@ var ZoteroPane = new function () {
 				null,
 				(event, collection) => {
 					if (event.target.tagName == 'menuitem') {
-						this.copyCollection(collection);
+						this.copyCollection(collection, selected);
 						event.stopPropagation();
 					}
 				},
@@ -5120,6 +4901,12 @@ var ZoteroPane = new function () {
 				let nsIURI = Services.io.newURI(uri, null, null);
 				let handler = Services.io.getProtocolHandler("zotero").wrappedJSObject;
 				let extension = handler.getExtension(nsIURI);
+				// Don't pass URIs with unsupported extensions to the OS, which would just
+				// send them back to us
+				if (!extension) {
+					Zotero.logError(`Unsupported zotero: URI '${uri}'`);
+					continue;
+				}
 				if (extension.noContent) {
 					extension.doAction(nsIURI);
 					return;
@@ -5135,45 +4922,12 @@ var ZoteroPane = new function () {
 		}
 	}
 	
-	// TODO upon electron:
-	// Technically just forwards to the react itemsView
-	// but it is not as robust as XUL. Unfortunately we cannot use the original XUL
-	// version since it causes terrible layout issues when mixing XUL and HTML
-	// Keeping this function here since setting this message is technically
-	// the responsibility of the ZoteroPane and should be independent upon itemsView,
-	// which hopefully we will fix once electronero arrives
-	function setItemsPaneMessage(content, lock) {
-		if (this._itemsPaneMessageLocked) {
-			return;
-		}
-
-		// Make message permanent
-		if (lock) {
-			this._itemsPaneMessageLocked = true;
-		}
-
-		if (this.itemsView) {
-			this.itemsView.setItemsPaneMessage(content, lock);
-		}
-	}
-	
-	function clearItemsPaneMessage() {
-		// If message box is locked, don't clear
-		if (this._itemsPaneMessageLocked) {
-			return;
-		}
-		
-		if (this.itemsView) {
-			this.itemsView.clearItemsPaneMessage();
-		}
-	}
-	
-	
 	/**
 	 * @return {Promise<Integer|null|false>} - The id of the new note in non-popup mode, null in
 	 *     popup mode (where a note isn't created immediately), or false if library isn't editable
 	 */
 	this.newNote = async function (popup, parentKey, text, citeURI) {
+		let libraryView = this.libraryView;
 		// Shouldn't be reachable with multiple libraries selected (toolbar is disabled),
 		// but just in case
 		let rows = this.getCollectionTreeRows();
@@ -5220,9 +4974,11 @@ var ZoteroPane = new function () {
 			}
 		});
 		
-		await this.selectItem(itemID);
+		await this.selectItems([itemID], { libraryView });
 		
-		document.getElementById('zotero-note-editor').focus();
+		if (libraryView?.isConnected) {
+			libraryView.getElement('zotero-note-editor').focus();
+		}
 		
 		return itemID;
 	};
@@ -5264,6 +5020,7 @@ var ZoteroPane = new function () {
 		text = '<blockquote' + (uri ? ' cite="' + uri + '"' : '') + '>'
 			+ Zotero.Utilities.text2html(text) + "</blockquote>";
 		
+		let libraryView = this.libraryView;
 		var items = this.getSelectedItems();
 		
 		if (this.itemsView.selection.count == 1 && items[0] && items[0].isNote()) {
@@ -5272,8 +5029,9 @@ var ZoteroPane = new function () {
 			items[0].setNote(note + text);
 			await items[0].saveTx();
 			
-			var noteElem = document.getElementById('zotero-note-editor')
-			noteElem.focus();
+			if (libraryView?.isConnected) {
+				libraryView.getElement('zotero-note-editor').focus();
+			}
 			return true;
 		}
 		
@@ -5295,6 +5053,7 @@ var ZoteroPane = new function () {
 
 		return Zotero.Notes.open(itemID, undefined, {
 			openInWindow,
+			window
 		});
 	};
 
@@ -5345,7 +5104,7 @@ var ZoteroPane = new function () {
 	 */
 	this.addAttachmentFromDialog = async function (link, parentItemID, files = null) {
 		var libraryID;
-		if (Zotero_Tabs.selectedType === 'library') {
+		if (Zotero_Tabs.selectedIsLibrary) {
 			// Shouldn't be reachable with multiple libraries selected (toolbar is disabled),
 			// but just in case
 			let rows = this.getCollectionTreeRows();
@@ -5455,8 +5214,7 @@ var ZoteroPane = new function () {
 				}
 				else {
 					if (file.endsWith(".lnk")) {
-						let win = Services.wm.getMostRecentWindow("navigator:browser");
-						win.ZoteroPane.displayCannotAddShortcutMessage(file);
+						ZoteroPane.displayCannotAddShortcutMessage(file);
 						continue;
 					}
 
@@ -5513,7 +5271,7 @@ var ZoteroPane = new function () {
 	 * Shows progress dialog for a webpage/snapshot save request
 	 */
 	function _showPageSaveStatus(title) {
-		var progressWin = new Zotero.ProgressWindow();
+		var progressWin = new Zotero.ProgressWindow({ window });
 		progressWin.changeHeadline(Zotero.getString('ingester.scraping'));
 		var icon = 'chrome://zotero/skin/treeitem-webpage.png';
 		progressWin.addLines(title, icon)
@@ -5633,6 +5391,7 @@ var ZoteroPane = new function () {
 	
 	this.viewItems = async function (items, event, options = {}) {
 		let { noLocateOnMissing } = options;
+		let collectionsView = this.collectionsView;
 		for (let i = 0; i < items.length; i++) {
 			let item = items[i];
 			if (item.isRegularItem()) {
@@ -5670,7 +5429,7 @@ var ZoteroPane = new function () {
 				}
 			}
 			else if (item.isNote()) {
-				if (!this.collectionsView.editable) {
+				if (!collectionsView.editable) {
 					continue;
 				}
 				let openInWindow = event?.shiftKey || options.forceAlternateWindowBehavior;
@@ -5727,6 +5486,7 @@ var ZoteroPane = new function () {
 			await Zotero.FileHandlers.open(item, {
 				location: extraData?.location,
 				openInWindow,
+				window
 			});
 		};
 		
@@ -7098,6 +6858,7 @@ var ZoteroPane = new function () {
 		itemReadTimeout = setTimeout(async () => {
 			itemReadTimeout = null;
 			
+			let libraryView = this.libraryView;
 			// Check to make sure we're still on the same item
 			var items = this.getSelectedItems();
 			if (items.length != 1 || items[0].id != feedItemID) {
@@ -7112,7 +6873,9 @@ var ZoteroPane = new function () {
 			}
 			
 			await feedItem.toggleRead(true);
-			this.itemPane.setReadLabel(true);
+			if (libraryView?.isConnected) {
+				libraryView.itemPane.setReadLabel(true);
+			}
 		}, FEED_READ_TIMEOUT);
 	};
 	
@@ -7237,7 +7000,7 @@ var ZoteroPane = new function () {
 	
 	
 	this.hideRetractionBanner = function () {
-		document.getElementById('retracted-items-container').setAttribute('collapsed', true);
+		Zotero.Banners.hide('retracted-items-container');
 		Zotero.Prefs.clear('retractions.recentItems');
 	};
 	
@@ -7349,14 +7112,15 @@ var ZoteroPane = new function () {
 	};
 
 	this.hideArchitectureWarning = function () {
-		document.getElementById('architecture-warning-container').setAttribute('collapsed', true);
+		Zotero.Banners.hide('architecture-warning-container');
 	};
 
 	
 	this.showPostUpgradeBanner = function () {
 		// Don't show for non-release builds or if disabled
 		if (Zotero.isBetaBuild || Zotero.isDevBuild || Zotero.isSourceBuild
-				|| !Zotero.Prefs.get('showPostUpgradeBanner')) {
+				|| !Zotero.Prefs.get('showPostUpgradeBanner')
+				|| Zotero.Banners.isPostUpgradeBannerDeferred()) {
 			return;
 		}
 		// Don't show if we've already shown a banner for this or a higher major version
@@ -7388,13 +7152,11 @@ var ZoteroPane = new function () {
 	
 	
 	this.hidePostUpgradeBanner = function (remindMeLater = false) {
-		document.getElementById('post-upgrade-container').setAttribute('collapsed', true);
 		if (remindMeLater) {
-			setTimeout(() => {
-				this.showPostUpgradeBanner();
-			}, 1000 * 60 * 60 * 24); // 24 hours
+			Zotero.Banners.deferPostUpgradeBanner();
 		}
 		else {
+			Zotero.Banners.hide('post-upgrade-container');
 			let majorVersion = parseInt(Zotero.version.split('.')[0]);
 			Zotero.Prefs.set('postUpgradeBannerVersionShown', majorVersion);
 		}
@@ -7434,7 +7196,7 @@ var ZoteroPane = new function () {
 	};
 
 	this.hideFileRenamingBanner = function () {
-		document.getElementById('file-renaming-banner-container').setAttribute('collapsed', true);
+		Zotero.Banners.hide('file-renaming-banner-container');
 		Zotero.Prefs.clear('autoRenameFiles.bannerDisplayTime');
 		Zotero.Prefs.set('autoRenameFiles.bannerShown', true);
 	};
@@ -7444,24 +7206,11 @@ var ZoteroPane = new function () {
 	 * Sets the layout to either a three-vertical-pane layout and a layout where itemsPane is above itemPane
 	 */
 	this.updateLayout = function () {
-		var layoutSwitcher = document.getElementById("zotero-layout-switcher");
-		var itemsSplitter = document.getElementById("zotero-items-splitter");
-		var sidenav = document.getElementById("zotero-view-item-sidenav");
-
-		if (Zotero.Prefs.get("layout") === "stacked") { // itemsPane above itemPane
-			layoutSwitcher.setAttribute("orient", "vertical");
-			itemsSplitter.setAttribute("orient", "vertical");
-			sidenav.classList.add("stacked");
-			this.itemPane.classList.add("stacked");
-			document.documentElement.classList.add("stacked");
+		let stacked = Zotero.Prefs.get("layout") === "stacked";
+		for (let view of this.libraryViews) {
+			view.applyLayout(stacked);
 		}
-		else {  // three-vertical-pane
-			layoutSwitcher.setAttribute("orient", "horizontal");
-			itemsSplitter.setAttribute("orient", "horizontal");
-			sidenav.classList.remove("stacked");
-			this.itemPane.classList.remove("stacked");
-			document.documentElement.classList.remove("stacked");
-		}
+		document.documentElement.classList.toggle("stacked", stacked);
 
 		this.updateLayoutConstraints();
 		ZoteroContextPane.update();
@@ -7469,23 +7218,143 @@ var ZoteroPane = new function () {
 	};
 	
 	
+	/**
+	 * @return {Object|null} - The window's session state, or null if it's still restoring
+	 *     its saved one
+	 */
 	this.getState = function () {
+		if (getUnrestoredSessionState()) {
+			return null;
+		}
 		return {
 			type: 'pane',
-			tabs: Zotero_Tabs.getState()
+			geometry: {
+				screenX: window.screenX,
+				screenY: window.screenY,
+				width: window.outerWidth,
+				height: window.outerHeight,
+				sizemode: document.documentElement.getAttribute('sizemode')
+			},
+			tabs: Zotero_Tabs.getState(),
+			settings: this.getWindowSettings()
 		};
 	};
 	
 	/**
-	 * Unserializes zotero-persist elements from preferences
+	 * Get a setting that this window keeps for itself, such as an item pane or quick search
+	 * setting
+	 *
+	 * A window's settings are saved with its state and copied to windows opened from it, so
+	 * changing one in a window doesn't affect other windows. A setting the window hasn't
+	 * changed or been opened with comes from the pref of the same name, which holds the value
+	 * set most recently in any window, and a change to the pref from outside of a main window
+	 * applies to all windows.
+	 *
+	 * @param {String} name - Pref name
+	 * @return {*}
 	 */
-	this.unserializePersist = function () {
+	this.getWindowSetting = function (name) {
+		observeWindowSettingPref(name);
+		if (!(name in _windowSettings.prefs)) {
+			_windowSettings.prefs[name] = Zotero.Prefs.get(name);
+		}
+		return structuredClone(_windowSettings.prefs[name]);
+	};
+	
+	/**
+	 * Set a setting for this window, and save it to the pref of the same name for windows that
+	 * open without one
+	 *
+	 * @param {String} name - Pref name
+	 * @param {*} value - undefined to clear
+	 */
+	this.setWindowSetting = function (name, value) {
+		observeWindowSettingPref(name);
+		_windowSettings.prefs[name] = structuredClone(value);
+		// Pref observers run synchronously within the write, so other windows see the flag and
+		// keep their own values
+		Zotero.Prefs.settingForWindow = true;
+		try {
+			if (value === undefined) {
+				Zotero.Prefs.clear(name);
+			}
+			else {
+				Zotero.Prefs.set(name, value);
+			}
+		}
+		finally {
+			Zotero.Prefs.settingForWindow = false;
+		}
+		dispatchWindowSettingChange(name);
+	};
+	
+	/**
+	 * Get the column settings this window keeps for an item tree, if it has any
+	 *
+	 * @param {String} id - The tree's prefsId
+	 * @return {Object|null}
+	 */
+	this.getItemTreeColumnPrefs = function (id) {
+		let prefs = _windowSettings.itemTreeColumns[id];
+		return prefs ? structuredClone(prefs) : null;
+	};
+	
+	/**
+	 * @param {String} id - The tree's prefsId
+	 * @param {Object} prefs
+	 */
+	this.setItemTreeColumnPrefs = function (id, prefs) {
+		_windowSettings.itemTreeColumns[id] = structuredClone(prefs);
+	};
+	
+	/**
+	 * @return {Object} - The settings this window keeps, for its state
+	 */
+	this.getWindowSettings = function () {
+		return structuredClone(_windowSettings);
+	};
+	
+	function normalizeWindowSettings(settings) {
+		return {
+			prefs: structuredClone(settings?.prefs || {}),
+			itemTreeColumns: structuredClone(settings?.itemTreeColumns || {})
+		};
+	}
+	
+	function observeWindowSettingPref(name) {
+		if (_windowSettingObservers.has(name)) {
+			return;
+		}
+		_windowSettingObservers.set(name, Zotero.Prefs.registerObserver(name, () => {
+			// A change made outside of a main window (e.g., in about:config or the settings)
+			// applies to all windows, but a change made in a window, which also writes the pref
+			// for windows opened later, applies only to that window, so skip it here
+			if (Zotero.Prefs.settingForWindow) {
+				return;
+			}
+			_windowSettings.prefs[name] = Zotero.Prefs.get(name);
+			dispatchWindowSettingChange(name);
+		}));
+	}
+	
+	function dispatchWindowSettingChange(name) {
+		window.dispatchEvent(
+			new CustomEvent('zotero-window-setting-change', { detail: { name } })
+		);
+	}
+	
+	/**
+	 * Unserializes zotero-persist elements from preferences
+	 *
+	 * @param {LibraryView} [view] - Restore only the elements of this library view
+	 */
+	this.unserializePersist = function (view) {
 		_unserialized = true;
 		var serializedValues = Zotero.Prefs.get("pane.persist") || "{}";
 		serializedValues = JSON.parse(serializedValues);
 		
 		for (var id in serializedValues) {
-			var el = document.getElementById(id);
+			var el = view ? view.getElement(id) : document.getElementById(id);
 			if (!el) {
 				Zotero.debug(`Trying to restore persist data for #${id} but elem not found`, 5);
 				continue;
@@ -7513,7 +7382,7 @@ var ZoteroPane = new function () {
 			}
 		}
 		
-		if (this.itemsView) {
+		if (!view && this.itemsView) {
 			// may not yet be initialized
 			try {
 				this.itemsView.sort();
@@ -7524,8 +7393,13 @@ var ZoteroPane = new function () {
 
 	/**
 	 * Serializes zotero-persist attributes to preferences
+	 *
+	 * Library views share one set of values, keyed by base id, so only one view's elements
+	 * are serialized.
+	 *
+	 * @param {LibraryView} [view] - The library view to serialize; defaults to the active view
 	 */
-	this.serializePersist = function () {
+	this.serializePersist = function (view = this.libraryView) {
 		if (!_unserialized) return;
 		try {
 			var serializedValues = JSON.parse(Zotero.Prefs.get('pane.persist'));
@@ -7534,10 +7408,17 @@ var ZoteroPane = new function () {
 			serializedValues = {};
 		}
 		var persistedElements = new Set();
+		var visitedElements = new Set();
 		for (let el of document.querySelectorAll("[zotero-persist]")) {
 			if (!el.getAttribute) continue;
 			var id = el.getAttribute("id");
 			if (!id) continue;
+			let elView = el.closest('library-view');
+			if (elView) {
+				if (elView !== view) continue;
+				id = elView.getBaseID(id);
+			}
+			visitedElements.add(id);
 			var elValues = {};
 			for (let attr of el.getAttribute("zotero-persist").split(/[\s,]+/)) {
 				if (el.hasAttribute(attr)) {
@@ -7547,9 +7428,10 @@ var ZoteroPane = new function () {
 			}
 			serializedValues[id] = elValues;
 		}
-		// Remove elements that no longer persist anything
+		// Remove elements that no longer persist anything, keeping the library view's when
+		// there's no library view to read them from
 		for (let i in serializedValues) {
-			if (!persistedElements.has(i)) {
+			if (!persistedElements.has(i) && (view || visitedElements.has(i))) {
 				delete serializedValues[i];
 			}
 		}
@@ -7558,15 +7440,11 @@ var ZoteroPane = new function () {
 	
 	
 	this.updateWindow = function () {
-		var zoteroPane = document.getElementById('zotero-pane');
 		// Must match value in overlay.css
 		var breakpoint = 1000;
 		var className = `width-${breakpoint}`;
-		if (window.innerWidth >= breakpoint) {
-			zoteroPane.classList.add(className);
-		}
-		else {
-			zoteroPane.classList.remove(className);
+		for (let view of this.libraryViews) {
+			view.classList.toggle(className, window.innerWidth >= breakpoint);
 		}
 	};
 	
@@ -7578,12 +7456,18 @@ var ZoteroPane = new function () {
 	this.updateLayoutConstraints = function () {
 		var paneStack = document.getElementById("zotero-pane-stack");
 		if (paneStack.hidden) return;
+		// A window without a library view is only as wide as the tab bar requires
+		if (!this.libraryView) {
+			document.documentElement.style.setProperty('--width-of-fixed-components', '0px');
+			document.documentElement.style.setProperty('--height-of-fixed-components', '0px');
+			return;
+		}
 
 		var titlebar = document.getElementById('zotero-title-bar');
-		var trees = document.getElementById('zotero-trees');
-		var itemsPaneContainer = document.getElementById('zotero-items-pane-container');
-		var collectionsPane = document.getElementById("zotero-collections-pane");
-		var tagSelector = document.getElementById("zotero-tag-selector");
+		var trees = this.libraryView.getElement('zotero-trees');
+		var itemsPaneContainer = this.libraryView.getElement('zotero-items-pane-container');
+		var collectionsPane = this.libraryView.getElement("zotero-collections-pane");
+		var tagSelector = this.libraryView.getElement("zotero-tag-selector");
 		let layoutModeMenus = [
 			document.getElementById("view-menuitem-standard"),
 			document.getElementById("view-menuitem-stacked"),
@@ -7612,13 +7496,16 @@ var ZoteroPane = new function () {
 		document.documentElement.style.setProperty('--height-of-fixed-components', `${fixedComponentHeight}px`);
 
 		let layoutChanged = false;
+		// The layout is shared by all windows, so only switch it by window size when there's
+		// a single window
+		let canAutoStack = Zotero.getZoteroPanes().length <= 1;
 		// Collections pane + items pane + items pane + sidenav + 3px for draggability
 		const windowAutoStackMinWidth = 930;
 		if (window.innerWidth < windowAutoStackMinWidth) {
 			// Disable layout mode menus because the standard mode is not available
 			layoutModeMenus.forEach(menu => menu.toggleAttribute("disabled", "true"));
 			// If the window is too small in standard mode, enter stack mode temporarily
-			if (!isStackedMode && !isTempStackedMode) {
+			if (canAutoStack && !isStackedMode && !isTempStackedMode) {
 				Zotero.Prefs.set('tempStackedMode', true);
 				Zotero.Prefs.set('layout', 'stacked');
 				layoutChanged = true;
@@ -7626,7 +7513,7 @@ var ZoteroPane = new function () {
 		}
 		else {
 			layoutModeMenus.forEach(menu => menu.removeAttribute("disabled"));
-			if (isTempStackedMode) {
+			if (canAutoStack && isTempStackedMode) {
 				Zotero.Prefs.clear('tempStackedMode');
 				Zotero.Prefs.set('layout', 'standard');
 				layoutChanged = true;

@@ -116,6 +116,25 @@ class ReaderInstance {
 		return this._type;
 	}
 
+	/**
+	 * The main window this reader belongs to, or the most recent one for a reader window
+	 *
+	 * @return {ChromeWindow|null}
+	 */
+	_getMainWindow() {
+		return this._window?.ZoteroPane ? this._window : Zotero.getMainWindow();
+	}
+
+	/**
+	 * The window a library action should go to -- this reader's window if it has a library
+	 * view, or the most recent window that does
+	 *
+	 * @return {ChromeWindow|null}
+	 */
+	_getLibraryWindow() {
+		return this._window?.ZoteroPane?.libraryView ? this._window : Zotero.getMainWindow();
+	}
+
 	async focus() {
 		// A queued focus request can outlive a cancelled/closed reader tab.
 		// Cancellation is normal; do not touch a destroyed frame or time out.
@@ -127,6 +146,16 @@ class ReaderInstance {
 	getSecondViewState() {
 		let state = this._iframeWindow?.wrappedJSObject?.getSecondViewState?.();
 		return state ? JSON.parse(JSON.stringify(state)) : undefined;
+	}
+
+	/**
+	 * This reader's own primary view state, which the attachment's saved state only matches
+	 * until another reader for the attachment saves its own
+	 *
+	 * @return {Object|undefined}
+	 */
+	getPrimaryViewState() {
+		return this._primaryViewState ? JSON.parse(JSON.stringify(this._primaryViewState)) : undefined;
 	}
 
 	async migrateMendeleyColors(libraryID, annotations) {
@@ -195,6 +224,7 @@ class ReaderInstance {
 
 		this.annotationItemIDs = annotationItems.map(x => x.id);
 		state = state || (await this._getState());
+		this._primaryViewState = state;
 
 
 		if (!await this._waitForReader()) return false;
@@ -372,13 +402,11 @@ class ReaderInstance {
 			onChangeViewState: async (state, primary) => {
 				state = JSON.parse(JSON.stringify(state));
 				if (primary) {
+					this._primaryViewState = state;
 					await this._setState(state);
 				}
 				else if (this.tabID) {
-					let win = Zotero.getMainWindow();
-					if (win) {
-						win.Zotero_Tabs.setTabData(this.tabID, { secondViewState: state });
-					}
+					this._window.Zotero_Tabs.setTabData(this.tabID, { secondViewState: state });
 				}
 			},
 			onOpenTagsPopup: (id, x, y) => {
@@ -400,7 +428,7 @@ class ReaderInstance {
 				}
 			},
 			onOpenLink: (url) => {
-				let win = Services.wm.getMostRecentWindow('navigator:browser');
+				let win = this._getMainWindow();
 				if (win) {
 					win.ZoteroPane.loadURI(url);
 				}
@@ -422,7 +450,7 @@ class ReaderInstance {
 				this._setPopupPosition(id, position);
 			},
 			onFocusContextPane: () => {
-				if (this instanceof ReaderWindow || !this._window.ZoteroContextPane.focus()) {
+				if (!this._window.ZoteroContextPane.focus()) {
 					this.focusFirst();
 				}
 			},
@@ -580,20 +608,17 @@ class ReaderInstance {
 			},
 			onToggleContextPane: () => {
 				Zotero.debug('toggle context pane');
-				let win = Zotero.getMainWindow();
-				win.ZoteroContextPane.togglePane();
+				this._window.ZoteroContextPane?.togglePane();
 			},
 			onToolbarShiftTab: () => {
 				// Shift-tab from the toolbar focuses the sync button (if reader instance is opened in a tab)
 				if (!this.tabID) return;
-				let win = Zotero.getMainWindow();
-				win.Zotero_Tabs.focusBack();
+				this._window.Zotero_Tabs.focusBack();
 			},
 			onIframeTab: () => {
 				// Tab after the last tabstop will focus the contextPane (if reader instance is opened in a tab)
 				if (!this.tabID) return;
-				let win = Zotero.getMainWindow();
-				win.Zotero_Tabs.focusForward();
+				this._window.Zotero_Tabs.focusForward();
 			},
 			onSetZoom: (iframe, zoom) => {
 				iframe.browsingContext.textZoom = 1;
@@ -662,7 +687,7 @@ class ReaderInstance {
 		}, this._iframeWindow, { cloneFunctions: true }));
 
 		this._resolveInitPromise();
-		// Set title once again, because `ReaderWindow` isn't loaded the first time
+		// Set the title again now that the internal reader can show it
 		this.updateTitle();
 
 		if (Zotero.isBetaBuild || Zotero.isDevBuild || Zotero.isSourceBuild) {
@@ -1012,12 +1037,14 @@ class ReaderInstance {
 	}
 
 	export() {
-		let zp = Zotero.getActiveZoteroPane();
-		zp.exportPDF(this._item.id);
+		let win = this._getMainWindow();
+		if (win) {
+			win.ZoteroPane.exportPDF(this._item.id);
+		}
 	}
 
 	showInLibrary() {
-		let win = Zotero.getMainWindow();
+		let win = this._getLibraryWindow();
 		if (win) {
 			let item = Zotero.Items.get(this._item.id);
 			let id = item.parentID || item.id;
@@ -1568,10 +1595,7 @@ class ReaderInstance {
 
 	_updateSecondViewState() {
 		if (this.tabID) {
-			let win = Zotero.getMainWindow();
-			if (win) {
-				win.Zotero_Tabs.setTabData(this.tabID, { secondViewState: this.getSecondViewState() });
-			}
+			this._window.Zotero_Tabs.setTabData(this.tabID, { secondViewState: this.getSecondViewState() });
 		}
 	}
 
@@ -1788,7 +1812,9 @@ class ReaderInstance {
 	_getReadAloudRemoteInterface(targetWindow) {
 		if (!this._window) return null;
 		// Wrap return values in child window Promises to avoid permissions errors
-		let audioCache = this._window.caches.open('read-aloud');
+		// The cache is opened from whichever window the reader is in when it's used, since the
+		// reader can move to another window
+		let openAudioCache = () => this._window.caches.open('read-aloud');
 		return {
 			getVoices: () => {
 				return new targetWindow.Promise(async (resolve) => {
@@ -1799,7 +1825,7 @@ class ReaderInstance {
 					// Prune cache entries with outdated versions once per session,
 					// after the voices (and their current cache versions) are known
 					if (!readAloudCachePruned && result.voices) {
-						this._pruneReadAloudCache(audioCache, result.voices);
+						this._pruneReadAloudCache(openAudioCache(), result.voices);
 					}
 				});
 			},
@@ -1809,7 +1835,7 @@ class ReaderInstance {
 					let cacheURL = this._getReadAloudCacheURL(segment, voice);
 					let cache;
 					try {
-						cache = await audioCache;
+						cache = await openAudioCache();
 						let cached = await cache.match(cacheURL);
 						if (cached) {
 							// Word-level timestamps are cached in a response header
@@ -1997,7 +2023,7 @@ class ReaderTab extends ReaderInstance {
 		this._showContextPaneToggle = true;
 		this._readAloudPlaying = false;
 		this._pointerDownWindow = null;
-		this._window = Services.wm.getMostRecentWindow('navigator:browser');
+		this._window = options.window || Services.wm.getMostRecentWindow('navigator:browser');
 		let existingTabID = options.tabID;
 		let select = !options.background;
 		// If an unloaded tab for this item already exists, load the reader in it.
@@ -2029,27 +2055,11 @@ class ReaderTab extends ReaderInstance {
 			this._tabContainer = container;
 		}
 
-		this._iframe = this._window.document.createXULElement('browser');
-		this._iframe.setAttribute('class', 'reader');
-		this._iframe.setAttribute('flex', '1');
-		this._iframe.setAttribute('type', 'content');
-		this._iframe.setAttribute('transparent', 'true');
+		this._iframe = this._createBrowser();
 		this._iframe.setAttribute('src', 'resource://zotero/reader/reader.html');
-		this._tabContainer.appendChild(this._iframe);
 		this._iframe.docShell.windowDraggingAllowed = true;
-		// Derive the initial docShell activity here, because tabs opened in
-		// the background, unlike deselected tabs, don't go through a tab
-		// 'select' notification
-		this._updateDocShellActivity();
-		
-		this._popupset = this._window.document.createXULElement('popupset');
-		this._tabContainer.appendChild(this._popupset);
-		
 		this._window.addEventListener('DOMContentLoaded', this._handleLoad);
-		this._window.addEventListener('pointerdown', this._handlePointerDown);
-		this._window.addEventListener('pointerup', this._handlePointerUp);
-
-		this._iframe.setAttribute('tooltip', 'html-tooltip');
+		this._attachToWindow();
 
 		this._onToggleSidebarCallback = (open) => {
 			if (open) {
@@ -2072,27 +2082,119 @@ class ReaderTab extends ReaderInstance {
 			}
 		};
 
-		this._open({ location: options.location, secondViewState: options.secondViewState }).then((opened) => {
+		this._open({
+			state: options.primaryViewState,
+			location: options.location,
+			secondViewState: options.secondViewState
+		}).then((opened) => {
 			// The tab can close while _open waits for its frame. Do not register
 			// callbacks on the removed container when initialization was cancelled.
 			if (opened === false || this._isUninitialized || this._isTabClosed) return;
-			this._tabContainer.addEventListener('tab-bottom-placeholder-resize', (event) => {
-				this.setBottomPlaceholderHeight(event.detail.height);
-			});
-
-			this._tabContainer.addEventListener('tab-context-pane-toggle', (event) => {
-				this.setContextPaneOpen(event.detail.open);
-			});
-
-			this._tabContainer.addEventListener('tab-selection-change', (event) => {
-				if (event.detail.selected) {
-					this._updateLayout();
-				}
-			});
+			this._addTabContainerListeners();
 			if (select) {
 				this._updateLayout();
 			}
 		});
+	}
+
+	/**
+	 * Create the reader's <browser> in its tab container
+	 *
+	 * @return {XULElement}
+	 */
+	_createBrowser() {
+		let browser = this._window.document.createXULElement('browser');
+		browser.setAttribute('class', 'reader');
+		browser.setAttribute('flex', '1');
+		browser.setAttribute('type', 'content');
+		browser.setAttribute('transparent', 'true');
+		browser.setAttribute('tooltip', 'html-tooltip');
+		this._tabContainer.appendChild(browser);
+		return browser;
+	}
+
+	/**
+	 * Set up what the reader needs from the window its tab is in, when it's created and when
+	 * it's moved to another window. _detachFromWindow() undoes it.
+	 */
+	_attachToWindow() {
+		// Derive the docShell activity here, because tabs opened in the background, unlike
+		// deselected tabs, don't go through a tab 'select' notification
+		this._updateDocShellActivity();
+		this._popupset = this._window.document.createXULElement('popupset');
+		this._tabContainer.appendChild(this._popupset);
+		this._window.addEventListener('pointerdown', this._handlePointerDown);
+		this._window.addEventListener('pointerup', this._handlePointerUp);
+	}
+
+	_detachFromWindow() {
+		this._window.removeEventListener('DOMContentLoaded', this._handleLoad);
+		this._window.removeEventListener('pointerdown', this._handlePointerDown);
+		this._window.removeEventListener('pointerup', this._handlePointerUp);
+		this._pointerDownWindow = null;
+	}
+
+	_addTabContainerListeners() {
+		this._tabContainer.addEventListener('tab-bottom-placeholder-resize', (event) => {
+			this.setBottomPlaceholderHeight(event.detail.height);
+		});
+		this._tabContainer.addEventListener('tab-context-pane-toggle', (event) => {
+			this.setContextPaneOpen(event.detail.open);
+		});
+		this._tabContainer.addEventListener('tab-selection-change', (event) => {
+			if (event.detail.selected) {
+				this._updateLayout();
+			}
+		});
+	}
+
+	/**
+	 * Whether the reader has loaded far enough to move to another window with its document
+	 *
+	 * @return {Boolean}
+	 */
+	canMoveToWindow() {
+		return !!(this._internalReader && this._iframeWindow && !this._isTabClosed);
+	}
+
+	/**
+	 * Move the reader into a new tab in another main window, keeping its document -- the
+	 * page, selection, find bar, undo history, and Read Aloud playback -- by swapping it into
+	 * a <browser> there. The caller closes the old tab.
+	 *
+	 * @param {ChromeWindow} targetWindow
+	 * @param {Integer} [index]
+	 * @return {String} - The id of the new tab
+	 */
+	moveToWindow(targetWindow, index) {
+		let { tab } = this._window.Zotero_Tabs._getTab(this.tabID);
+		let { id, container } = targetWindow.Zotero_Tabs.add({
+			type: 'reader',
+			title: tab.title,
+			index,
+			data: JSON.parse(JSON.stringify(tab.data)),
+			onClose: this._handleTabClose,
+			select: false
+		});
+		this._hideReadAloudGuidance();
+		this._detachFromWindow();
+		// The old tab closing is no longer this reader's closing
+		tab.onClose = null;
+		let oldBrowser = this._iframe;
+		this._window = targetWindow;
+		this._tabContainer = container;
+		this.tabID = id;
+		this._iframe = this._createBrowser();
+		this._iframe.swapFrameLoaders(oldBrowser);
+		oldBrowser.removeEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
+		this._iframe.addEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
+		this._attachToWindow();
+		this._addTabContainerListeners();
+		if (this._readAloudStatus) {
+			targetWindow.Zotero_Tabs.setAudioStatus(id, this._readAloudStatus);
+		}
+		targetWindow.Zotero_Tabs.select(id);
+		return id;
 	}
 
 	_handleTabClose = () => {
@@ -2105,18 +2207,13 @@ class ReaderTab extends ReaderInstance {
 
 	uninit() {
 		if (this._window) {
-			this._window.removeEventListener('DOMContentLoaded', this._handleLoad);
-			this._window.removeEventListener('pointerdown', this._handlePointerDown);
-			this._window.removeEventListener('pointerup', this._handlePointerUp);
+			this._detachFromWindow();
 		}
-		this._pointerDownWindow = null;
 		super.uninit();
 	}
 	
 	close() {
-		this._window.removeEventListener('DOMContentLoaded', this._handleLoad);
-		this._window.removeEventListener('pointerdown', this._handlePointerDown);
-		this._window.removeEventListener('pointerup', this._handlePointerUp);
+		this._detachFromWindow();
 		if (this.tabID) {
 			this._window.Zotero_Tabs.close(this.tabID);
 		}
@@ -2205,6 +2302,7 @@ class ReaderTab extends ReaderInstance {
 	}
 
 	_setReadAloudStatus(status) {
+		this._readAloudStatus = status;
 		this._readAloudPlaying = status.active && !status.paused;
 		// Wake up the docShell even if this tab is in the background,
 		// so event-loop tasks run immediately. Without this, playing
@@ -2241,197 +2339,6 @@ class ReaderTab extends ReaderInstance {
 		this.toggleSidebar(sidebarState.open);
 		this.setSidebarWidth(sidebarState.width);
 	}
-}
-
-
-class ReaderWindow extends ReaderInstance {
-	constructor(options) {
-		super(options);
-		this._sidebarWidth = options.sidebarWidth;
-		this._sidebarOpen = options.sidebarOpen;
-		this._contextPaneOpen = false;
-		this._bottomPlaceholderHeight = 0;
-		this._onClose = options.onClose;
-
-		let win = Services.wm.getMostRecentWindow('navigator:browser');
-		if (!win) return;
-
-		this._window = win.open(
-			'chrome://zotero/content/reader.xhtml', '', 'chrome,resizable'
-		);
-
-		this._window.addEventListener('DOMContentLoaded', (event) => {
-			if (event.target === this._window.document) {
-				this._popupset = this._window.document.getElementById('zotero-reader-popupset');
-				this._window.onFileMenuOpen = this._onFileMenuOpen.bind(this);
-				this._window.onEditMenuOpen = this._onEditMenuOpen.bind(this);
-				this._window.onGoMenuOpen = this._onGoMenuOpen.bind(this);
-				this._window.onViewMenuOpen = this._onViewMenuOpen.bind(this);
-				this._window.onWindowMenuOpen = this._onWindowMenuOpen.bind(this);
-				this._window.reader = this;
-				this._iframe = this._window.document.getElementById('reader');
-				this._iframe.docShell.windowDraggingAllowed = true;
-			}
-
-			if (this._iframe.contentWindow && this._iframe.contentWindow.document === event.target) {
-				this._iframeWindow = this._window.document.getElementById('reader').contentWindow;
-				this._iframeWindow.addEventListener('error', event => Zotero.logError(event.error));
-				this._wrapConsole();
-					this._iframe.addEventListener('contextmenu', this._handleReaderTextboxContextMenuOpen);
-			}
-
-			this._switchReaderSubtype(this._type);
-		});
-
-		// Keep the actual initialization result available to tab tear-off. The
-		// legacy _initPromise only resolves on success and cannot report failures
-		// in file loading. Ordinary callers still receive logged errors.
-		this._openPromise = this._open({ state: options.state, location: options.location, secondViewState: options.secondViewState });
-		this._openPromise.catch(error => Zotero.logError(error));
-	}
-
-	_switchReaderSubtype(subtype) {
-		// Do the same as in standalone.js
-		this._window.document.querySelectorAll(
-			'.menu-type-reader.pdf, .menu-type-reader.epub, .menu-type-reader.snapshot'
-		).forEach(el => el.hidden = true);
-		this._window.document.querySelectorAll('.menu-type-reader.' + subtype).forEach(el => el.hidden = false);
-	}
-
-	close() {
-		this.uninit();
-		this._window.close();
-		this._onClose();
-	}
-
-	_setTitleValue(title) {
-		// Tab titles render Citeproc.js markup. There's no good way
-		// to show rich text in a window title, but we can at least
-		// strip the markup.
-		this._window.document.title = Zotero.Utilities.Internal.renderItemTitle(title);
-	}
-
-	_onFileMenuOpen(event, popup) {
-		if (event.target !== popup) {
-			return;
-		}
-		let item = Zotero.Items.get(this._item.id);
-		let library = Zotero.Libraries.get(item.libraryID);
-		
-		let transferFromPDFMenuitem = this._window.document.getElementById('menu_transferFromPDF');
-		let importFromEPUBMenuitem = this._window.document.getElementById('menu_importFromEPUB');
-		
-		if (item
-			&& Zotero.Sync.Storage.Profiles.canSaveFilesForLibrary(library.libraryID)
-			&& !(item.deleted || item.parentItem && item.parentItem.deleted)) {
-			let annotations = item.getAnnotations();
-			let canTransferFromPDF = annotations.find(x => x.annotationIsExternal);
-			transferFromPDFMenuitem.toggleAttribute('disabled', !canTransferFromPDF);
-			importFromEPUBMenuitem.removeAttribute('disabled');
-		}
-		else {
-			transferFromPDFMenuitem.setAttribute('disabled', true);
-			importFromEPUBMenuitem.setAttribute('disabled', true);
-		}
-
-		this.onUpdateCustomMenus(event, 'file', popup);
-	}
-
-	_onEditMenuOpen(event, popup) {
-		if (event.target !== popup) {
-			return;
-		}
-		this._window.goUpdateGlobalEditMenuItems(true);
-
-		this.onUpdateCustomMenus(event, 'edit', popup);
-	}
-
-	_onViewMenuOpen(event, popup) {
-		if (event.target !== popup) {
-			return;
-		}
-		if (this._type === 'pdf' || this._type === 'epub') {
-			this._window.document.getElementById('view-menuitem-no-spreads').toggleAttribute('checked', this._internalReader.spreadMode === 0);
-			this._window.document.getElementById('view-menuitem-odd-spreads').toggleAttribute('checked', this._internalReader.spreadMode === 1);
-			this._window.document.getElementById('view-menuitem-even-spreads').toggleAttribute('checked', this._internalReader.spreadMode === 2);
-		}
-		if (this._type === 'pdf') {
-			this._window.document.getElementById('view-menuitem-vertical-scrolling').toggleAttribute('checked', this._internalReader.scrollMode === 0);
-			this._window.document.getElementById('view-menuitem-horizontal-scrolling').toggleAttribute('checked', this._internalReader.scrollMode === 1);
-			this._window.document.getElementById('view-menuitem-wrapped-scrolling').toggleAttribute('checked', this._internalReader.scrollMode === 2);
-			this._window.document.getElementById('view-menuitem-hand-tool').toggleAttribute('checked', this._internalReader.toolType === 'hand');
-			this._window.document.getElementById('view-menuitem-zoom-auto').toggleAttribute('checked', this._internalReader.zoomAutoEnabled);
-			this._window.document.getElementById('view-menuitem-zoom-page-width').toggleAttribute('checked', this._internalReader.zoomPageWidthEnabled);
-			this._window.document.getElementById('view-menuitem-zoom-page-height').toggleAttribute('checked', this._internalReader.zoomPageHeightEnabled);
-		}
-		else if (this._type === 'epub') {
-			this._window.document.getElementById('view-menuitem-scrolled').toggleAttribute('checked', this._internalReader.flowMode === 'scrolled');
-			this._window.document.getElementById('view-menuitem-paginated').toggleAttribute('checked', this._internalReader.flowMode === 'paginated');
-		}
-		this._window.document.getElementById('view-menuitem-split-vertically').toggleAttribute('checked', this._internalReader.splitType === 'vertical');
-		this._window.document.getElementById('view-menuitem-split-horizontally').toggleAttribute('checked', this._internalReader.splitType === 'horizontal');
-
-		this.onUpdateCustomMenus(event, 'view', popup);
-	}
-
-	_onGoMenuOpen(event, popup) {
-		if (event.target !== popup) {
-			return;
-		}
-		let keyBack = this._window.document.getElementById('key_back');
-		let keyForward = this._window.document.getElementById('key_forward');
-
-		if (Zotero.isMac) {
-			keyBack.setAttribute('key', '[');
-			keyBack.setAttribute('modifiers', 'meta');
-			keyForward.setAttribute('key', ']');
-			keyForward.setAttribute('modifiers', 'meta');
-		}
-		else {
-			keyBack.setAttribute('keycode', 'VK_LEFT');
-			keyBack.setAttribute('modifiers', 'alt');
-			keyForward.setAttribute('keycode', 'VK_RIGHT');
-			keyForward.setAttribute('modifiers', 'alt');
-		}
-
-		let menuItemBack = this._window.document.getElementById('go-menuitem-back');
-		let menuItemForward = this._window.document.getElementById('go-menuitem-forward');
-		menuItemBack.setAttribute('key', 'key_back');
-		menuItemForward.setAttribute('key', 'key_forward');
-
-		if (['pdf', 'epub'].includes(this._type)) {
-			this._window.document.getElementById('go-menuitem-first-page').toggleAttribute('disabled', !this._internalReader.canNavigateToFirstPage);
-			this._window.document.getElementById('go-menuitem-last-page').toggleAttribute('disabled', !this._internalReader.canNavigateToLastPage);
-		}
-		this._window.document.getElementById('go-menuitem-back').toggleAttribute('disabled', !this._internalReader.canNavigateBack);
-		this._window.document.getElementById('go-menuitem-forward').toggleAttribute('disabled', !this._internalReader.canNavigateForward);
-
-		this.onUpdateCustomMenus(event, 'go', popup);
-	}
-
-	_onWindowMenuOpen(event, popup) {
-		if (event.target !== popup) {
-			return;
-		}
-
-		this.onUpdateCustomMenus(event, 'window', popup);
-	}
-
-	onUpdateCustomMenus = function (event, type, popup) {
-		let tabType = "reader";
-		let tabSubType = this._type;
-		Zotero.MenuManager.updateMenuPopup(popup, `reader/menubar/${type}`, {
-			event,
-			tabType,
-			tabSubType,
-			tabID: undefined,
-			getContext: () => ({
-				items: this._item ? [this._item] : [],
-				tabType,
-				tabSubType,
-			})
-		});
-	};
 }
 
 
@@ -2827,9 +2734,12 @@ class Reader {
 	
 	async init() {
 		await Zotero.uiReadyPromise;
-		Zotero.Session.state.windows
-			.filter(x => x.type == 'reader' && Zotero.Items.exists(x.itemID))
-			.forEach(x => this.open(x.itemID, null, { title: x.title, openInWindow: true, secondViewState: x.secondViewState }));
+		// Saved reader windows are reopened as main windows holding a reader tab
+		for (let { itemID, title, secondViewState } of Zotero.Session.takeReaderWindowStates()) {
+			if (Zotero.Items.exists(itemID)) {
+				Zotero.openMainWindow({ readerTabState: { itemID, secondViewState, title } });
+			}
+		}
 	}
 	
 	_loadSidebarState() {
@@ -2933,27 +2843,16 @@ class Reader {
 		return this._readers.find(r => (r instanceof ReaderTab) && r.tabID === tabID);
 	}
 	
-	getWindowStates() {
-		return this._readers
-			.filter(r => r instanceof ReaderWindow)
-			.map(r => ({
-				type: 'reader',
-				itemID: r.itemID,
-				title: r._title,
-				secondViewState: r.getSecondViewState()
-			}));
-	}
-
 	async openURI(itemURI, location, options) {
 		let item = await Zotero.URI.getURIItem(itemURI);
 		if (!item) return;
 		await this.open(item.id, location, options);
 	}
 
-	async open(itemID, location, { title, tabIndex, tabID, openInBackground, openInWindow, allowDuplicate, secondViewState, preventJumpback } = {}) {
+	async open(itemID, location, { title, tabIndex, tabID, openInBackground, openInWindow, allowDuplicate, primaryViewState, secondViewState, preventJumpback, window: ownerWindow } = {}) {
 		let { libraryID } = Zotero.Items.getLibraryAndKeyFromID(itemID);
 		let library = Zotero.Libraries.get(libraryID);
-		let win = Zotero.getMainWindow();
+		let win = ownerWindow || Zotero.getMainWindow();
 
 		await library.waitForDataLoad('item');
 
@@ -2965,10 +2864,12 @@ class Reader {
 		this._loadSidebarState();
 		this.triggerAnnotationsImportCheck(itemID);
 		let reader;
+		// A tab is only a duplicate of another tab in the same window
+		let inWindow = r => !(r instanceof ReaderTab) || r._window === win;
 		// If duplicating is not allowed, and no reader instance is loaded for itemID,
 		// try to find an unloaded tab and select it. Zotero.Reader.open will then be called again
 		if (!allowDuplicate && !this._readers.find(
-			r => r.itemID === itemID && (openInWindow || !r._isTabClosed)
+			r => r.itemID === itemID && (openInWindow || (!r._isTabClosed && inWindow(r)))
 		)) {
 			if (win) {
 				let existingTabID = win.Zotero_Tabs.getTabIDByItemID(itemID);
@@ -2980,15 +2881,21 @@ class Reader {
 		}
 
 		if (openInWindow) {
-			reader = this._readers.find(r => r.itemID === itemID && (r instanceof ReaderWindow));
+			// A tab for the item in any window stands in for a window of its own
+			reader = this._readers.find(r => r.itemID === itemID && !r._isTabClosed);
 		}
 		else if (!allowDuplicate) {
-			reader = this._readers.find(r => r.itemID === itemID && !r._isTabClosed);
+			reader = this._readers.find(
+				r => r.itemID === itemID && !r._isTabClosed && inWindow(r)
+			);
 		}
 
 		if (reader) {
 			if (reader instanceof ReaderTab) {
 				reader._window.Zotero_Tabs.select(reader.tabID, true);
+				if (openInWindow) {
+					reader._window.focus();
+				}
 			}
 			
 			if (location) {
@@ -2996,29 +2903,19 @@ class Reader {
 			}
 		}
 		else if (openInWindow) {
-			reader = new ReaderWindow({
-				item,
-				location,
-				secondViewState,
-				sidebarWidth: this._sidebarWidth,
-				sidebarOpen: this._sidebarOpen,
-				bottomPlaceholderHeight: this._bottomPlaceholderHeight,
-				onClose: () => {
-					this._readers.splice(this._readers.indexOf(reader), 1);
-					Zotero.Session.debounceSave();
-				}
-			});
-			this._readers.push(reader);
-			Zotero.Session.debounceSave();
+			// The new window selects and focuses its reader tab as it opens
+			return this._openInNewWindow(item, { title, location, secondViewState });
 		}
 		else {
 			reader = new ReaderTab({
 				item,
 				location,
+				primaryViewState,
 				secondViewState,
 				title,
 				index: tabIndex,
 				tabID,
+				window: win,
 				background: openInBackground,
 				sidebarWidth: this._sidebarWidth,
 				sidebarOpen: this._sidebarOpen,
@@ -3045,6 +2942,30 @@ class Reader {
 			&& !win.Zotero_Tabs.focusOptions.keepTabFocused) {
 			// Do not change focus when tabs are traversed/selected using a keyboard
 			reader.focus();
+		}
+		return reader;
+	}
+
+	/**
+	 * Open a main window whose only tab is a reader tab for an item, and wait for its reader
+	 *
+	 * @param {Zotero.Item} item
+	 * @param {Object} options
+	 * @param {String} [options.title]
+	 * @param {Object} [options.location]
+	 * @param {Object} [options.secondViewState]
+	 * @return {Promise<ReaderTab|undefined>}
+	 */
+	async _openInNewWindow(item, { title, location, secondViewState }) {
+		let win = Zotero.openMainWindow({
+			readerTabState: { itemID: item.id, secondViewState, title }
+		});
+		await new Promise(resolve => win.addEventListener('load', resolve, { once: true }));
+		await win.ZoteroPane.loadedPromise;
+		await win.Zotero_Tabs.getLoadPromise(win.Zotero_Tabs.selectedID);
+		let reader = this.getByTabID(win.Zotero_Tabs.selectedID);
+		if (reader && location) {
+			reader.navigate(location);
 		}
 		return reader;
 	}

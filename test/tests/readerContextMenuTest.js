@@ -13,20 +13,31 @@
  * changes. All documents and windows belong to the runner's disposable profile.
  */
 describe('Reader native context menus', function () {
-	// Both window types share ReaderInstance's menu bridge, but have separate
-	// popup containers and iframe lifecycles. Exercise both to prevent a fix that
-	// only works in the main window or only after a tab has been detached.
-	[false, true].forEach((openInWindow) => {
-		describe(openInWindow ? 'standalone PDF window' : 'PDF tab', function () {
-			let win, reader, internal, attachment;
+	// Exercise each popup container lifecycle, including a preserved document
+	// whose original window is closed after it moves to another main window.
+	['PDF tab', 'reader-only main window', 'moved PDF tab'].forEach((view) => {
+		describe(view, function () {
+			let win, reader, internal, attachment, transferWindow;
 
 			before(async function () {
 				win = await loadZoteroPane();
 				attachment = await importFileAttachment('test.pdf');
-				reader = await Zotero.Reader.open(attachment.id, null, { openInWindow });
+				reader = await Zotero.Reader.open(attachment.id, null, {
+					openInWindow: view === 'reader-only main window', window: win
+				});
 				await reader._initPromise;
 				internal = reader._internalReader;
 				await internal._primaryView.initializedPromise;
+				if (view === 'moved PDF tab') {
+					transferWindow = await loadZoteroPane();
+					let frame = reader._iframeWindow;
+					await win.Zotero_Tabs.moveToWindow(reader.tabID, transferWindow);
+					win.close();
+					win = transferWindow;
+					assert.strictEqual(reader._iframeWindow, frame);
+					assert.strictEqual(reader._window, transferWindow);
+				}
+				assert.include(Zotero.getMainWindows(), reader._window);
 			});
 
 			/** Close native popups even when an assertion fails partway through. */
@@ -46,6 +57,7 @@ describe('Reader native context menus', function () {
 				win?.Zotero_Tabs.closeAll();
 				await Zotero.Promise.delay(100);
 				win?.close();
+				if (transferWindow && !transferWindow.closed) transferWindow.close();
 				if (attachment) await attachment.eraseTx();
 			});
 

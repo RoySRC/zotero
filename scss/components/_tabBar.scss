@@ -47,6 +47,20 @@
 		flex-grow: 1;
 	}
 
+	.tab-drop-indicator {
+		position: absolute;
+		width: 2px;
+		transform: translateX(-50%);
+		border-radius: 1px;
+		background: var(--accent-blue);
+		pointer-events: none;
+		z-index: 2;
+
+		&[hidden] {
+			display: none;
+		}
+	}
+
 	.scroll-start-arrow, .scroll-end-arrow {
 		padding: 0 4px;
 		align-items: center;
@@ -126,7 +140,7 @@
 	}
 
 	&.scrollable {
-		.tabs-wrapper > .tabs > :first-child {
+		.tabs-wrapper > .tabs > .tab.pinned {
 			display: none;
 		}
 
@@ -134,7 +148,7 @@
 			display: flex;
 		}
 
-		.pinned-tabs {
+		.pinned-tabs:has(.tab) {
 			display: block;
 		}
 	}
@@ -184,15 +198,6 @@
 	&.dragging {
 		z-index: 1;
 	}
-
-	// Keep Gecko's native drag source mounted while removing its tab-strip slot.
-	// display:none/removing the node can lose dragend; a hidden absolute node
-	// preserves the session and lets Escape/re-entry restore the same reader.
-	&[data-drag-preview] {
-		position: absolute;
-		visibility: hidden;
-		pointer-events: none;
-	}
 	
 	&:not(:last-child) {
 		border-inline-end: var(--tab-border);
@@ -202,8 +207,8 @@
 		background-color: var(--fill-quinary);
 	}
 
-	&:first-child {
-		padding: 6px; // no 22px padding for X button because pinned tab cannot be closed
+	&:not(.closable) {
+		padding: 6px; // no 22px padding for X button, which isn't shown
 
 		.tab-close {
 			display: none;

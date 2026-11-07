@@ -59,7 +59,11 @@ const ZoteroStandalone = new function () {
 		this._notifierID = Zotero.Notifier.registerObserver(
 			{
 				notify: async (action, type, ids, extraData) => {
-					if (['select', 'load'].includes(action)) {
+					if ((action == 'select'
+								// A tab that finishes loading after another tab is selected
+								// doesn't change the menus
+								|| action == 'load' && ids[0] == Zotero_Tabs.selectedID)
+							&& Zotero_Tabs.isOwnTabEvent(extraData, ids[0])) {
 						// Reader doesn't have tabID yet
 						setTimeout(async () => {
 							// Item and other things might not be loaded yet when reopening tabs
@@ -146,12 +150,12 @@ const ZoteroStandalone = new function () {
 		// Switch to library tab if dragging over PDF/EPUB/HTML file(s)
 		window.addEventListener('dragover', function (event) {
 			// TODO: Consider allowing more (or all) file types, although shouldn't interfere with image dragging to note editor
-			if (Zotero_Tabs.selectedID != 'zotero-pane'
+			if (!Zotero_Tabs.selectedIsLibrary
 					&& event.dataTransfer.items
 					&& event.dataTransfer.items.length
 					&& !Array.from(event.dataTransfer.items).find(x =>
 						!['application/pdf', 'application/epub+zip', 'text/html'].includes(x.type))) {
-				Zotero_Tabs.select('zotero-pane');
+				Zotero_Tabs.selectLibraryTab();
 			}
 		}, true);
 	}
@@ -505,17 +509,28 @@ const ZoteroStandalone = new function () {
 		this.updateMenuItemCheckmark('view-menuitem-ui-density-comfortable', density == 'comfortable');
 		
 		// Panes
+		let libraryView = ZoteroPane.libraryView;
+		let paneMenuItems = [
+			'view-menuitem-collections-pane',
+			'view-menuitem-item-pane',
+			'view-menuitem-tag-selector'
+		];
+		for (let id of paneMenuItems) {
+			this.updateMenuItemEnabled(id, !!libraryView);
+		}
 		this.updateMenuItemCheckmark(
 			'view-menuitem-collections-pane',
-			!document.getElementById('zotero-collections-pane').hasAttribute('collapsed')
+			!!libraryView
+				&& !libraryView.getElement('zotero-collections-pane').hasAttribute('collapsed')
 		);
 		this.updateMenuItemCheckmark(
 			'view-menuitem-item-pane',
-			!document.getElementById('zotero-item-pane').hasAttribute('collapsed')
+			!!libraryView && !ZoteroPane.itemPane.hasAttribute('collapsed')
 		);
 		this.updateMenuItemCheckmark(
 			'view-menuitem-tag-selector',
-			!document.getElementById('zotero-tag-selector-container').hasAttribute('collapsed')
+			!!libraryView
+				&& !libraryView.getElement('zotero-tag-selector-container').hasAttribute('collapsed')
 		);
 		
 		// Font size
@@ -575,6 +590,10 @@ const ZoteroStandalone = new function () {
 		this.onUpdateCustomMenus(event, 'help');
 	};
 
+	this.onWindowMenuOpen = function (event) {
+		this.onUpdateCustomMenus(event, 'window');
+	};
+
 	this.onUpdateCustomMenus = function (event, type) {
 		let { type: tabType, subType: tabSubType, id: tabID } = Zotero_Tabs.getTabInfo();
 
@@ -584,7 +603,8 @@ const ZoteroStandalone = new function () {
 			go: '#menu_goPopup',
 			view: '#menu_viewPopup',
 			tools: '#menu_ToolsPopup',
-			help: '#menu_HelpPopup'
+			help: '#menu_HelpPopup',
+			window: '#windowPopup'
 		};
 		let popup = document.querySelector(POPUP_SELECTOR_MAP[type]);
 		if (event.target !== popup) {
@@ -633,30 +653,32 @@ const ZoteroStandalone = new function () {
 				break;
 			
 			case 'collections-pane':
-				var collectionsPane = document.getElementById('zotero-collections-pane');
+				var libraryView = ZoteroPane.libraryView;
+				var collectionsPane = libraryView.getElement('zotero-collections-pane');
 				// Show
 				if (collectionsPane.hasAttribute('collapsed')) {
-					document.getElementById('zotero-collections-splitter').setAttribute('state', 'open');
+					libraryView.getElement('zotero-collections-splitter').setAttribute('state', 'open');
 					collectionsPane.removeAttribute('collapsed');
 				}
 				// Hide
 				else {
-					document.getElementById('zotero-collections-splitter').setAttribute('state', 'collapsed');
+					libraryView.getElement('zotero-collections-splitter').setAttribute('state', 'collapsed');
 					collectionsPane.setAttribute('collapsed', true);
 				}
 				ZoteroPane.updateLayoutConstraints();
 				break;
 			
 			case 'item-pane':
-				var itemPane = document.getElementById('zotero-item-pane');
+				libraryView = ZoteroPane.libraryView;
+				var itemPane = ZoteroPane.itemPane;
 				// Show
 				if (itemPane.hasAttribute('collapsed')) {
-					document.getElementById('zotero-items-splitter').setAttribute('state', 'open');
+					libraryView.getElement('zotero-items-splitter').setAttribute('state', 'open');
 					itemPane.removeAttribute('collapsed');
 				}
 				// Hide
 				else {
-					document.getElementById('zotero-items-splitter').setAttribute('state', 'collapsed');
+					libraryView.getElement('zotero-items-splitter').setAttribute('state', 'collapsed');
 					itemPane.setAttribute('collapsed', true);
 				}
 				ZoteroPane.updateLayoutConstraints();
